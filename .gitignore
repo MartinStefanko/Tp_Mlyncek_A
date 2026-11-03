@@ -33,3 +33,4 @@ baseline/*
 # Versioned JSON: contract schemas and test fixtures (override *.json above)
 !schemas/*.json
 !tests/contract/fixtures/*.json
+!service/mock/fixtures/*.json

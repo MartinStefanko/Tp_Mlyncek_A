@@ -12,25 +12,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from qgen.contract import Report, UnitsResult  # noqa: E402
+from qgen.contract.schemas import SCHEMAS, build_schema  # noqa: E402
 
 SCHEMA_DIR = REPO_ROOT / "schemas"
-JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
-
-SCHEMAS = {
-    "lesson.schema.json": (UnitsResult, "Formát units (GET /v1/jobs/{id}/result)"),
-    "report.schema.json": (Report, "Report (GET /v1/jobs/{id}/report)"),
-}
-
-
-def build_schema(model, description: str, file_name: str) -> dict:
-    schema = model.model_json_schema(mode="validation")
-    return {
-        "$schema": JSON_SCHEMA_DIALECT,
-        "$id": f"https://qgen/schemas/{file_name}",
-        "description": description,
-        **schema,
-    }
 
 
 def render(schema: dict) -> str:
@@ -45,8 +29,8 @@ def main(argv=None) -> int:
 
     outdated = []
     args.out.mkdir(parents=True, exist_ok=True)
-    for file_name, (model, description) in SCHEMAS.items():
-        text = render(build_schema(model, description, file_name))
+    for name, (file_name, _model, _description) in SCHEMAS.items():
+        text = render(build_schema(name))
         path = args.out / file_name
         if args.check:
             if not path.is_file() or path.read_text(encoding="utf-8") != text:

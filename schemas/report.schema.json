@@ -3,97 +3,11 @@
   "$id": "https://qgen/schemas/report.schema.json",
   "description": "Report (GET /v1/jobs/{id}/report)",
   "$defs": {
-    "LearningObject": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "description": "Learning object id, e.g. 'LO-12'.",
-          "pattern": "^LO-\\d+$",
-          "title": "Id",
-          "type": "string"
-        },
-        "title": {
-          "title": "Title",
-          "type": "string"
-        },
-        "statement": {
-          "title": "Statement",
-          "type": "string"
-        },
-        "lo_type": {
-          "description": "Kind of learning object, e.g. 'definition'.",
-          "title": "Lo Type",
-          "type": "string"
-        },
-        "source": {
-          "$ref": "#/$defs/LearningObjectSource"
-        },
-        "keywords": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Keywords",
-          "type": "array"
-        },
-        "bloom_level": {
-          "title": "Bloom Level",
-          "type": "string"
-        },
-        "topic": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Topic"
-        }
-      },
-      "required": [
-        "id",
-        "title",
-        "statement",
-        "lo_type",
-        "source",
-        "keywords",
-        "bloom_level"
-      ],
-      "title": "LearningObject",
-      "type": "object"
-    },
-    "LearningObjectSource": {
-      "additionalProperties": false,
-      "properties": {
-        "file": {
-          "description": "Source file name, e.g. 'eko.pdf'.",
-          "minLength": 1,
-          "title": "File",
-          "type": "string"
-        },
-        "pages": {
-          "description": "Cited pages (1-based).",
-          "items": {
-            "minimum": 1,
-            "type": "integer"
-          },
-          "title": "Pages",
-          "type": "array"
-        }
-      },
-      "required": [
-        "file",
-        "pages"
-      ],
-      "title": "LearningObjectSource",
-      "type": "object"
-    },
     "Quality": {
       "additionalProperties": false,
+      "description": "Averages in the range 0–1, or null when not measured.\n\nThe pipeline scores on a 1–5 scale; the service converts a score x as (x − 1) / 4.\nTopic coverage is a percentage in the pipeline; the service divides it by 100.",
       "properties": {
-        "faithfulness_avg": {
+        "section_faithfulness_avg": {
           "anyOf": [
             {
               "maximum": 1.0,
@@ -105,7 +19,21 @@
             }
           ],
           "default": null,
-          "title": "Faithfulness Avg"
+          "title": "Section Faithfulness Avg"
+        },
+        "question_faithfulness_avg": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Question Faithfulness Avg"
         },
         "answerability_avg": {
           "anyOf": [
@@ -139,8 +67,9 @@
       "title": "Quality",
       "type": "object"
     },
-    "QuestionMapEntry": {
+    "QuestionMeta": {
       "additionalProperties": false,
+      "description": "Metadata of one question; the question is units[unit].questions[question].",
       "properties": {
         "unit": {
           "description": "Index in units.",
@@ -154,19 +83,61 @@
           "title": "Question",
           "type": "integer"
         },
-        "lo_id": {
-          "description": "Learning object id, e.g. 'LO-12'.",
-          "pattern": "^LO-\\d+$",
-          "title": "Lo Id",
+        "section_id": {
+          "description": "Section id, e.g. 'S-12'.",
+          "pattern": "^S-\\d+$",
+          "title": "Section Id",
           "type": "string"
+        },
+        "bloom_level": {
+          "enum": [
+            "remember",
+            "understand",
+            "apply",
+            "analyze",
+            "evaluate",
+            "create"
+          ],
+          "title": "Bloom Level",
+          "type": "string"
+        },
+        "keywords": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Keywords",
+          "type": "array"
+        },
+        "source": {
+          "description": "Cited files and pages; a question can cite more PDFs.",
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Source",
+          "type": "array"
+        },
+        "topic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Topic"
         }
       },
       "required": [
         "unit",
         "question",
-        "lo_id"
+        "section_id",
+        "bloom_level",
+        "keywords",
+        "source"
       ],
-      "title": "QuestionMapEntry",
+      "title": "QuestionMeta",
       "type": "object"
     },
     "ReportWarning": {
@@ -189,22 +160,104 @@
       ],
       "title": "ReportWarning",
       "type": "object"
+    },
+    "Section": {
+      "additionalProperties": false,
+      "description": "Section (tematický celok) of the document.",
+      "properties": {
+        "id": {
+          "description": "Section id, e.g. 'S-12'.",
+          "pattern": "^S-\\d+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        },
+        "lo_type": {
+          "description": "Kind of section, e.g. 'definition'.",
+          "title": "Lo Type",
+          "type": "string"
+        },
+        "prerequisites": {
+          "description": "Ids of sections this one builds on.",
+          "items": {
+            "description": "Section id, e.g. 'S-12'.",
+            "pattern": "^S-\\d+$",
+            "type": "string"
+          },
+          "title": "Prerequisites",
+          "type": "array"
+        },
+        "topic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Topic"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "statement",
+        "lo_type",
+        "prerequisites"
+      ],
+      "title": "Section",
+      "type": "object"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "description": "Source file name, e.g. 'eko.pdf'.",
+          "minLength": 1,
+          "title": "File",
+          "type": "string"
+        },
+        "pages": {
+          "description": "Cited pages (1-based).",
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": "Pages",
+          "type": "array"
+        }
+      },
+      "required": [
+        "file",
+        "pages"
+      ],
+      "title": "SourceRef",
+      "type": "object"
     }
   },
   "additionalProperties": false,
   "properties": {
-    "learning_objects": {
+    "sections": {
       "items": {
-        "$ref": "#/$defs/LearningObject"
+        "$ref": "#/$defs/Section"
       },
-      "title": "Learning Objects",
+      "title": "Sections",
       "type": "array"
     },
-    "question_map": {
+    "question_meta": {
       "items": {
-        "$ref": "#/$defs/QuestionMapEntry"
+        "$ref": "#/$defs/QuestionMeta"
       },
-      "title": "Question Map",
+      "title": "Question Meta",
       "type": "array"
     },
     "quality": {
@@ -222,14 +275,14 @@
         "minimum": 0.0,
         "type": "number"
       },
-      "description": "Seconds per step, e.g. {'extract': 12.4, 'learning_objects': 95.1}.",
+      "description": "Seconds per step, e.g. {'extract': 1.5, 'learning_objects': 56.3}.",
       "title": "Timings",
       "type": "object"
     }
   },
   "required": [
-    "learning_objects",
-    "question_map",
+    "sections",
+    "question_meta",
     "quality",
     "warnings",
     "timings"

@@ -195,3 +195,91 @@ Projekt vyžaduje internetové pripojenie, pretože generovanie výstupov prebie
 Kvalita výstupov závisí od kvality vstupného PDF dokumentu, extrahovaného textu a odpovedí jazykového modelu.
 
 API kľúč uchovávajte iba lokálne v súbore `.env` a nezdieľajte ho verejne.
+
+## Mock API pre backend
+
+Mock API má rovnaké endpointy ako budúca služba (Príloha A). Úlohy však iba simuluje.
+Pipeline ani LLM nevolá. Každá hotová úloha vráti rovnaký výsledok: príklad formátu `units`
+z kap. 6 a príklad reportu z Prílohy A. Backend ECEH (Laravel) tak môže integráciu robiť
+skôr, ako bude pipeline hotová.
+
+### Spustenie
+
+```bash
+cp .env.example .env          # nastavte QGEN_API_KEYS, QGEN_WEBHOOK_*
+docker compose -f docker-compose.mock.yml up --build
+```
+
+API beží na `http://localhost:8000`. Dokumentácia OpenAPI je na `http://localhost:8000/docs`.
+
+Bez Dockeru (z koreňa projektu, vo virtuálnom prostredí):
+
+```bash
+pip install -r requirements-mock.txt
+uvicorn service.main:app --port 8000
+```
+
+Mock číta tieto premenné: `QGEN_API_KEYS`, `QGEN_WEBHOOK_ALLOWED_HOSTS`, `QGEN_WEBHOOK_SECRET`,
+`QGEN_WEBHOOK_TIMEOUT_S`, `QGEN_MAX_FILES`, `QGEN_MAX_UPLOAD_MB`, `QGEN_MAX_ACTIVE_JOBS`,
+`QGEN_FAILED_INPUT_TTL_HOURS`, `QGEN_DEFAULT_LESSON_MINUTES`, `QGEN_OCR_ENABLED` a
+`QGEN_MOCK_DURATION_S` (dĺžka jednej úlohy v sekundách, predvolene 30).
+
+### Príklady (curl)
+
+```bash
+# Vytvorenie úlohy -> 202 a job_id. Pole súborov môže mať názov files alebo files[].
+curl -X POST http://localhost:8000/v1/jobs \
+  -H "X-API-Key: <kluc>" \
+  -F "files=@eko.pdf" \
+  -F 'options={"external_ref": "gen-01JB7Q3K",
+               "callback_url": "http://eceh-backend/api/internal/qgen/webhook",
+               "split": {"mode": "topics", "lesson_minutes": 45}}'
+
+# Rovnaký request znova -> 200, rovnaké job_id, "replayed": true
+# Stav úlohy
+curl -H "X-API-Key: <kluc>" http://localhost:8000/v1/jobs/<job_id>
+# Hľadanie podľa external_ref
+curl -H "X-API-Key: <kluc>" "http://localhost:8000/v1/jobs?external_ref=gen-01JB7Q3K"
+# Výsledok a report (iba v stave completed, inak 409)
+curl -H "X-API-Key: <kluc>" http://localhost:8000/v1/jobs/<job_id>/result
+curl -H "X-API-Key: <kluc>" http://localhost:8000/v1/jobs/<job_id>/report
+# Zrušenie (queued/running -> 200, cancelled) alebo zmazanie (koncový stav -> 204)
+curl -X DELETE -H "X-API-Key: <kluc>" http://localhost:8000/v1/jobs/<job_id>
+# Opakovanie úlohy v stave failed (do 24 h) -> 202, stav queued
+curl -X POST -H "X-API-Key: <kluc>" http://localhost:8000/v1/jobs/<job_id>/retry
+# JSON schémy
+curl -H "X-API-Key: <kluc>" http://localhost:8000/v1/schema/lesson
+```
+
+### Priebeh úlohy
+
+Úloha je prvých 5 % času v stave `queued` (`stage` je `null`). Potom je v stave `running`
+a postupne prejde krokmi `extract`, `language`, `learning_objects`, `lo_evaluation`,
+`questions`, `q_evaluation`, `split`, `output`. Hodnota `progress` rastie od 0 do 1.
+Po `QGEN_MOCK_DURATION_S` sekundách je úloha v stave `completed`.
+
+Ak má úloha `callback_url`, mock pošle webhook `job.stage_changed` (najviac raz na krok)
+a na konci `job.completed`, `job.failed` alebo `job.cancelled`. Podpis je
+`X-QGen-Signature: sha256=HMAC-SHA256(QGEN_WEBHOOK_SECRET, timestamp + "." + telo)`.
+Ak Laravel neodpovie 2xx, mock pokus zopakuje po 10 s, 60 s a 300 s. Pri každom pokuse
+pošle nový `X-QGen-Timestamp` a nový podpis. `X-QGen-Delivery` a telo ostanú rovnaké.
+
+### Simulácia chýb a pomalých úloh
+
+Správanie určuje začiatok hodnoty `external_ref`:
+
+| `external_ref` začína | Správanie |
+|---|---|
+| `mock-fail-` | Prvý pokus skončí v kroku `questions` stavom `failed`, `error.code` = `llm_error`, `retryable_until` = čas chyby + 24 h. `POST /retry` úlohu spustí znova a druhý pokus skončí `completed`. |
+| `mock-slow-` | Úloha trvá 5× dlhšie (predvolene 150 s). Vhodné na test zrušenia a pollingu. |
+| iné | Normálny priebeh. |
+
+Príklad: `"external_ref": "mock-fail-gen-42"`.
+
+### Rozdiely oproti skutočnej službe
+
+- Výsledok a report sú vždy rovnaké. Obsah PDF sa nečíta.
+- Úlohy sú iba v pamäti. Reštart kontajnera ich zmaže. Neexistuje `job.json` ani Redis.
+- Počet strán ani heslo PDF sa nekontrolujú. `extraction.ocr = true` sa vždy prijme.
+- Výsledky sa nemažú po 7 dňoch. PDF sa neukladá.
+- Webhooky posiela API proces, nie worker. Opakovania sa pri reštarte stratia.

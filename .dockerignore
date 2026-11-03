@@ -1,0 +1,12 @@
+venv/
+.git/
+**/__pycache__/
+*.pyc
+.env
+docs/
+baseline/
+Hlavna_cast/
+tests/
+scripts/
+vystup/
+*.pdf

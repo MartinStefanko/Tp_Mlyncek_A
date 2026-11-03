@@ -9,7 +9,9 @@ from pydantic import ValidationError
 
 from qgen.contract import (
     API_ERROR_CODES,
+    CreateJobResponse,
     ErrorResponse,
+    JobListResponse,
     JobStatus,
     Report,
     WebhookPayload,
@@ -18,24 +20,7 @@ from qgen.contract import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Example from Príloha A – Report.
-REPORT_EXAMPLE = {
-    "learning_objects": [
-        {
-            "id": "LO-12",
-            "title": "Akumulovaná hodnota",
-            "statement": "Akumulovaná hodnota je súčet istiny a úroku ...",
-            "lo_type": "definition",
-            "source": {"file": "eko.pdf", "pages": [4, 5]},
-            "keywords": ["úrok", "istina"],
-            "bloom_level": "understand",
-            "topic": "Hodnota peňazí v čase",
-        }
-    ],
-    "question_map": [{"unit": 0, "question": 0, "lo_id": "LO-12"}],
-    "quality": {"faithfulness_avg": 0.91, "answerability_avg": 0.95, "topic_coverage": 0.78},
-    "warnings": [{"code": "field_too_long", "message": "Otázka vyradená: zadanie má viac ako 4000 znakov."}],
-    "timings": {"extract": 12.4, "learning_objects": 95.1, "questions": 210.7, "split": 3.2},
-}
+REPORT_EXAMPLE = json.loads((Path(__file__).parent / "fixtures" / "report_example.json").read_text(encoding="utf-8"))
 
 # Example from Príloha A – stav úlohy.
 STATUS_EXAMPLE = {
@@ -67,7 +52,7 @@ WEBHOOK_EXAMPLE = {
 
 
 def test_report_example_passes_model_and_schema():
-    Report.model_validate(REPORT_EXAMPLE)
+    assert Report.model_validate(REPORT_EXAMPLE).model_dump(mode="json") == REPORT_EXAMPLE
     schema = json.loads((REPO_ROOT / "schemas" / "report.schema.json").read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator(schema).validate(REPORT_EXAMPLE)
 
@@ -75,12 +60,22 @@ def test_report_example_passes_model_and_schema():
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda r: r["learning_objects"][0].update(id="12"),
-        lambda r: r["learning_objects"][0].update(extra=1),
-        lambda r: r["question_map"][0].update(unit=-1),
+        lambda r: r["sections"][0].update(id="12"),
+        lambda r: r["sections"][0].update(id="LO-12"),
+        lambda r: r["sections"][0].update(extra=1),
+        lambda r: r["sections"][0].update(prerequisites=["11"]),
+        lambda r: r["question_meta"][0].update(unit=-1),
+        lambda r: r["question_meta"][0].update(section_id="LO-12"),
+        lambda r: r["question_meta"][0].update(bloom_level="pochopenie"),
+        lambda r: r["question_meta"][0].update(source={"file": "eko.pdf", "pages": [4]}),
+        lambda r: r["question_meta"][0]["source"][0].update(pages=[0]),
+        lambda r: r["question_meta"][0].update(lo_id="S-12"),
         lambda r: r["quality"].update(topic_coverage=77.78),
+        lambda r: r["quality"].update(section_faithfulness_avg=4.5),
+        lambda r: r["quality"].update(faithfulness_avg=0.9),
         lambda r: r["timings"].update(split=-0.1),
         lambda r: r.update(extra=[]),
+        lambda r: r.update(learning_objects=[]),
     ],
 )
 def test_invalid_report_rejected(mutate):
@@ -109,6 +104,35 @@ def test_failed_status_with_llm_error():
     )
     assert status.error.code == "llm_error"
     assert status.error.details == {}
+
+
+def test_quality_may_be_null():
+    data = json.loads(json.dumps(REPORT_EXAMPLE))
+    data["quality"] = {}
+    assert Report.model_validate(data).quality.model_dump() == {
+        "section_faithfulness_avg": None,
+        "question_faithfulness_avg": None,
+        "answerability_avg": None,
+        "topic_coverage": None,
+    }
+
+
+@pytest.mark.parametrize("level", ["remember", "understand", "apply", "analyze", "evaluate", "create"])
+def test_all_bloom_levels_accepted(level):
+    data = json.loads(json.dumps(REPORT_EXAMPLE))
+    data["question_meta"][0]["bloom_level"] = level
+    Report.model_validate(data)
+
+
+@pytest.mark.parametrize("code", ["llm_error", "worker_lost", "extraction_failed", "internal_error"])
+def test_job_error_codes_accepted(code):
+    JobStatus.model_validate({**STATUS_EXAMPLE, "status": "failed", "error": {"code": code, "message": "x"}})
+
+
+@pytest.mark.parametrize("code", ["timeout", "", "job_not_found"])
+def test_unknown_job_error_code_rejected(code):
+    with pytest.raises(ValidationError):
+        JobStatus.model_validate({**STATUS_EXAMPLE, "status": "failed", "error": {"code": code, "message": "x"}})
 
 
 @pytest.mark.parametrize(
@@ -154,6 +178,10 @@ def test_error_response_shape():
     assert ErrorResponse.model_validate({"error": {"code": "job_not_found", "message": "x"}}).error.details == {}
 
 
+def test_job_not_completed_is_an_api_error_code():
+    assert "job_not_completed" in API_ERROR_CODES
+
+
 def test_llm_error_is_not_an_api_error_code():
     assert "llm_error" not in API_ERROR_CODES
     with pytest.raises(ValidationError):
@@ -170,3 +198,24 @@ def test_exported_schemas_are_up_to_date():
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# --- POST /v1/jobs and GET /v1/jobs?external_ref= responses -------------------------------
+
+
+def test_create_job_response_matches_appendix_example():
+    # Príloha A – Príklad: vytvorenie úlohy (opakovaný request).
+    replayed = {"job_id": "7f3c2a1e", "status": "running", "replayed": True, "links": {"self": "/v1/jobs/7f3c2a1e"}}
+    assert CreateJobResponse.model_validate(replayed).model_dump(mode="json") == replayed
+    created = CreateJobResponse.model_validate(
+        {"job_id": "7f3c2a1e", "status": "queued", "links": {"self": "/v1/jobs/7f3c2a1e"}}
+    )
+    assert created.replayed is False
+    assert created.model_dump(mode="json")["links"] == {"self": "/v1/jobs/7f3c2a1e"}
+
+
+def test_job_list_response():
+    data = {"jobs": [{"job_id": "7f3c2a1e", "status": "failed", "created_at": "2026-11-03T10:12:01Z"}]}
+    assert JobListResponse.model_validate(data).model_dump(mode="json") == data
+    with pytest.raises(ValidationError):
+        JobListResponse.model_validate({"jobs": [{**data["jobs"][0], "progress": 0.5}]})

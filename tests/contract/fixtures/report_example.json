@@ -1,0 +1,33 @@
+{
+  "sections": [
+    {
+      "id": "S-12",
+      "title": "Akumulovaná hodnota",
+      "statement": "Akumulovaná hodnota je súčet istiny a úroku ...",
+      "lo_type": "definition",
+      "prerequisites": ["S-11"],
+      "topic": "Hodnota peňazí v čase"
+    }
+  ],
+  "question_meta": [
+    {
+      "unit": 0,
+      "question": 0,
+      "section_id": "S-12",
+      "bloom_level": "understand",
+      "keywords": ["úrok", "istina"],
+      "source": [{ "file": "eko.pdf", "pages": [4, 5] }],
+      "topic": "Hodnota peňazí v čase"
+    }
+  ],
+  "quality": {
+    "section_faithfulness_avg": 0.98,
+    "question_faithfulness_avg": 0.93,
+    "answerability_avg": 0.82,
+    "topic_coverage": 1.0
+  },
+  "warnings": [
+    { "code": "field_too_long", "message": "Otázka vyradená: zadanie má viac ako 4000 znakov." }
+  ],
+  "timings": { "extract": 1.5, "learning_objects": 56.3, "questions": 272.5, "split": 3.2 }
+}

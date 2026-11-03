@@ -1,0 +1,12 @@
+# Mock API for the ECEH backend (Laravel).
+#   cp .env.example .env      # then edit
+#   docker compose -f docker-compose.mock.yml up --build
+# API: http://localhost:8000, documentation: http://localhost:8000/docs
+services:
+  api-mock:
+    build:
+      context: .
+      dockerfile: Dockerfile.mock
+    ports: ["8000:8000"]
+    env_file: .env
+    restart: unless-stopped

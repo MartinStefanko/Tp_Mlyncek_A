@@ -1,7 +1,15 @@
 import pytest
 from pydantic import ValidationError
 
-from qgen.contract import JobOptions, LessonsSplit, SingleSplit, SyllabusSplit, TopicsSplit
+from qgen.contract import (
+    JobOptions,
+    LessonsSplit,
+    OptionDefaults,
+    SingleSplit,
+    SyllabusSplit,
+    TopicsSplit,
+    resolve_options,
+)
 
 # Example from Príloha A – Vstupné parametre (options).
 APPENDIX_EXAMPLE = {
@@ -11,7 +19,7 @@ APPENDIX_EXAMPLE = {
     "extraction": {"ocr": False},
     "questions": {
         "types": ["choice", "open", "no_answer"],
-        "per_learning_object": 3,
+        "per_section": 3,
         "choice_options": 4,
         "hints": 2,
     },
@@ -19,17 +27,15 @@ APPENDIX_EXAMPLE = {
 }
 
 
-def test_defaults():
+def test_missing_values_are_none_except_split():
     options = JobOptions()
     assert options.external_ref is None
     assert options.callback_url is None
-    assert options.language == "auto"
-    assert options.extraction.ocr is False
-    assert options.questions.types == ["choice", "open", "no_answer"]
-    assert options.questions.per_learning_object == 3
-    assert options.questions.choice_options == 4
-    assert options.questions.hints == 2
+    assert options.language is None
+    assert options.extraction is None
+    assert options.questions is None
     assert isinstance(options.split, SingleSplit)
+    assert options.split.lesson_minutes is None
 
 
 def test_appendix_example_passes():
@@ -105,8 +111,9 @@ def test_invalid_split_rejected(split):
         {"questions": {"types": []}},
         {"questions": {"types": ["essay"]}},
         {"questions": {"types": ["open", "open"]}},
-        {"questions": {"per_learning_object": 0}},
-        {"questions": {"per_learning_object": 11}},
+        {"questions": {"per_section": 0}},
+        {"questions": {"per_section": 11}},
+        {"questions": {"per_learning_object": 3}},
         {"questions": {"choice_options": 1}},
         {"questions": {"choice_options": 11}},
         {"questions": {"hints": -1}},
@@ -119,8 +126,71 @@ def test_invalid_options_rejected(options):
         JobOptions.model_validate(options)
 
 
-def test_partial_questions_keep_other_defaults():
-    options = JobOptions.model_validate({"questions": {"types": ["open"]}})
-    assert options.questions.types == ["open"]
-    assert options.questions.per_learning_object == 3
-    assert options.questions.hints == 2
+# --- resolve_options ------------------------------------------------------------------------
+
+SPEC_DEFAULTS = OptionDefaults()
+
+
+def test_spec_defaults():
+    assert SPEC_DEFAULTS == OptionDefaults(
+        language="auto",
+        ocr=False,
+        question_types=("choice", "open", "no_answer"),
+        per_section=3,
+        choice_options=4,
+        hints=2,
+        lesson_minutes=45,
+    )
+
+
+def test_resolve_empty_options():
+    resolved = resolve_options(JobOptions(), SPEC_DEFAULTS)
+    assert resolved.model_dump(mode="json") == {
+        "external_ref": None,
+        "callback_url": None,
+        "language": "auto",
+        "extraction": {"ocr": False},
+        "questions": {"types": ["choice", "open", "no_answer"], "per_section": 3, "choice_options": 4, "hints": 2},
+        "split": {"mode": "single", "lesson_count": None, "lesson_minutes": 45, "syllabus": None},
+    }
+
+
+def test_resolve_keeps_sent_values():
+    resolved = resolve_options(JobOptions.model_validate(APPENDIX_EXAMPLE), SPEC_DEFAULTS)
+    assert resolved.model_dump(mode="json") == APPENDIX_EXAMPLE
+
+
+def test_resolve_partial_questions_fills_the_rest():
+    resolved = resolve_options(JobOptions.model_validate({"questions": {"types": ["open"], "hints": 0}}), SPEC_DEFAULTS)
+    assert resolved.questions.types == ["open"]
+    assert resolved.questions.hints == 0
+    assert resolved.questions.per_section == 3
+    assert resolved.questions.choice_options == 4
+
+
+def test_resolve_uses_given_defaults():
+    defaults = OptionDefaults(language="sk", ocr=True, question_types=("open",), per_section=5, lesson_minutes=90)
+    resolved = resolve_options(JobOptions.model_validate({"split": {"mode": "lessons", "lesson_count": 4}}), defaults)
+    assert resolved.language == "sk"
+    assert resolved.extraction.ocr is True
+    assert resolved.questions.types == ["open"]
+    assert resolved.questions.per_section == 5
+    assert isinstance(resolved.split, LessonsSplit)
+    assert (resolved.split.lesson_count, resolved.split.lesson_minutes) == (4, 90)
+
+
+def test_resolve_does_not_override_explicit_false_or_lesson_minutes():
+    options = JobOptions.model_validate({"extraction": {"ocr": False}, "split": {"mode": "topics", "lesson_minutes": 30}})
+    resolved = resolve_options(options, OptionDefaults(ocr=True))
+    assert resolved.extraction.ocr is False
+    assert resolved.split.lesson_minutes == 30
+
+
+def test_resolved_options_survive_json_round_trip():
+    resolved = resolve_options(JobOptions.model_validate(APPENDIX_EXAMPLE), SPEC_DEFAULTS)
+    assert JobOptions.model_validate_json(resolved.model_dump_json()) == resolved
+
+
+def test_resolve_rejects_invalid_defaults():
+    with pytest.raises(ValidationError):
+        resolve_options(JobOptions(), OptionDefaults(lesson_minutes=0))
