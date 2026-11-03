@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qgen/schemas/lesson.schema.json",
+  "description": "Formát units (GET /v1/jobs/{id}/result)",
+  "$defs": {
+    "Choice": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "is_correct": {
+          "title": "Is Correct",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text",
+        "is_correct"
+      ],
+      "title": "Choice",
+      "type": "object"
+    },
+    "Hint": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Hint level, e.g. 'Ľahká nápoveda'.",
+          "maxLength": 50,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "description": "HTML text of the hint, e.g. '<p>…</p>'.",
+          "maxLength": 2000,
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "title": "Hint",
+      "type": "object"
+    },
+    "Question": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "choice"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "choices": {
+                "contains": {
+                  "properties": {
+                    "is_correct": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "is_correct"
+                  ]
+                },
+                "minItems": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "open"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "choices": {
+                "items": {
+                  "properties": {
+                    "is_correct": {
+                      "const": true
+                    }
+                  }
+                },
+                "maxItems": 1,
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "no_answer"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "choices": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "name": {
+          "description": "Short question name.",
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "description": "Question / task text.",
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "choice",
+            "open",
+            "no_answer"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "time_to_handle": {
+          "description": "Time in seconds.",
+          "minimum": 0,
+          "title": "Time To Handle",
+          "type": "integer"
+        },
+        "time_to_explain": {
+          "description": "Time in seconds.",
+          "minimum": 0,
+          "title": "Time To Explain",
+          "type": "integer"
+        },
+        "hints": {
+          "items": {
+            "$ref": "#/$defs/Hint"
+          },
+          "title": "Hints",
+          "type": "array"
+        },
+        "choices": {
+          "items": {
+            "$ref": "#/$defs/Choice"
+          },
+          "title": "Choices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "type",
+        "time_to_handle",
+        "time_to_explain",
+        "hints",
+        "choices"
+      ],
+      "title": "Question",
+      "type": "object"
+    },
+    "Unit": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 4000,
+          "title": "Description",
+          "type": "string"
+        },
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/Question"
+          },
+          "title": "Questions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "questions"
+      ],
+      "title": "Unit",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "units": {
+      "description": "Lessons; exactly one in split mode 'single'.",
+      "items": {
+        "$ref": "#/$defs/Unit"
+      },
+      "minItems": 1,
+      "title": "Units",
+      "type": "array"
+    }
+  },
+  "required": [
+    "units"
+  ],
+  "title": "UnitsResult",
+  "type": "object"
+}

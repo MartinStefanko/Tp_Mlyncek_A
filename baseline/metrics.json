@@ -1,0 +1,70 @@
+{
+  "created_at": "2026-11-03T16:40:25+00:00",
+  "inputs": [
+    {
+      "name": "eko.pdf",
+      "sha256": "69075eae95e33be4fa3ef5938a4f7f61079477b37b623aae24c59a595ecf15e0"
+    }
+  ],
+  "models": {
+    "lo_generation": "gemini-2.5-flash-lite",
+    "lo_prerequisites": "gemini-2.5-flash-lite",
+    "item_generation": "gemini-2.5-flash-lite",
+    "item_evaluation": "gemini-2.5-flash",
+    "item_evaluation_batch_size": 20,
+    "lo_batch_size": 10,
+    "item_batch_size": 10
+  },
+  "document_language": "sk",
+  "is_python_document": false,
+  "topic_coverage": {
+    "coverage_percent": 100.0,
+    "topics_total": 11,
+    "topics_covered": 11,
+    "similarity_threshold": 0.72
+  },
+  "lo_faithfulness": {
+    "average_faithfulness_score": 4.9268,
+    "los_evaluated": 41
+  },
+  "lo_relevance_to_segment": {
+    "average_similarity": 0.8028
+  },
+  "item_faithfulness": {
+    "average_faithfulness_score": 4.7294,
+    "items_evaluated": 85,
+    "faithful_items_percent": 92.94
+  },
+  "item_answerability": {
+    "average_answerability_score": 4.2824,
+    "items_evaluated": 85,
+    "answerable_items_percent": 81.18
+  },
+  "item_relevance_to_lo": {
+    "average_similarity": 0.8079
+  },
+  "counts": {
+    "pages": 69,
+    "los_all": 41,
+    "los_accepted": 41,
+    "items_all": 85,
+    "items_accepted": 79
+  },
+  "timings_seconds": {
+    "extraction": 1.4605,
+    "lo_pipeline_wall": 56.2974,
+    "lo_generation": 35.9011,
+    "lo_evaluation": 19.2857,
+    "item_pipeline_wall": 272.4953,
+    "item_generation": 58.3275,
+    "item_evaluation": 206.3292,
+    "total_wall": 330.2713
+  },
+  "llm_calls": {
+    "by_method": {
+      "generate_content": 43,
+      "embed_content": 9
+    },
+    "failed": 0
+  }
+}

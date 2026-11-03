@@ -24,3 +24,12 @@ Hlavna_cast/ucebny_material/
 
 # Temp files
 *.tmp
+
+# Test fixtures (input PDFs) and baseline run outputs – only metrics.json is versioned
+tests/fixtures/
+baseline/*
+!baseline/metrics.json
+
+# Versioned JSON: contract schemas and test fixtures (override *.json above)
+!schemas/*.json
+!tests/contract/fixtures/*.json

@@ -1,0 +1,239 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qgen/schemas/report.schema.json",
+  "description": "Report (GET /v1/jobs/{id}/report)",
+  "$defs": {
+    "LearningObject": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Learning object id, e.g. 'LO-12'.",
+          "pattern": "^LO-\\d+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        },
+        "lo_type": {
+          "description": "Kind of learning object, e.g. 'definition'.",
+          "title": "Lo Type",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/LearningObjectSource"
+        },
+        "keywords": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Keywords",
+          "type": "array"
+        },
+        "bloom_level": {
+          "title": "Bloom Level",
+          "type": "string"
+        },
+        "topic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Topic"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "statement",
+        "lo_type",
+        "source",
+        "keywords",
+        "bloom_level"
+      ],
+      "title": "LearningObject",
+      "type": "object"
+    },
+    "LearningObjectSource": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "description": "Source file name, e.g. 'eko.pdf'.",
+          "minLength": 1,
+          "title": "File",
+          "type": "string"
+        },
+        "pages": {
+          "description": "Cited pages (1-based).",
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": "Pages",
+          "type": "array"
+        }
+      },
+      "required": [
+        "file",
+        "pages"
+      ],
+      "title": "LearningObjectSource",
+      "type": "object"
+    },
+    "Quality": {
+      "additionalProperties": false,
+      "properties": {
+        "faithfulness_avg": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Faithfulness Avg"
+        },
+        "answerability_avg": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answerability Avg"
+        },
+        "topic_coverage": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Topic Coverage"
+        }
+      },
+      "title": "Quality",
+      "type": "object"
+    },
+    "QuestionMapEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "unit": {
+          "description": "Index in units.",
+          "minimum": 0,
+          "title": "Unit",
+          "type": "integer"
+        },
+        "question": {
+          "description": "Index in units[unit].questions.",
+          "minimum": 0,
+          "title": "Question",
+          "type": "integer"
+        },
+        "lo_id": {
+          "description": "Learning object id, e.g. 'LO-12'.",
+          "pattern": "^LO-\\d+$",
+          "title": "Lo Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "unit",
+        "question",
+        "lo_id"
+      ],
+      "title": "QuestionMapEntry",
+      "type": "object"
+    },
+    "ReportWarning": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "description": "Machine-readable code, e.g. 'field_too_long'.",
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ReportWarning",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "learning_objects": {
+      "items": {
+        "$ref": "#/$defs/LearningObject"
+      },
+      "title": "Learning Objects",
+      "type": "array"
+    },
+    "question_map": {
+      "items": {
+        "$ref": "#/$defs/QuestionMapEntry"
+      },
+      "title": "Question Map",
+      "type": "array"
+    },
+    "quality": {
+      "$ref": "#/$defs/Quality"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/ReportWarning"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "timings": {
+      "additionalProperties": {
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "description": "Seconds per step, e.g. {'extract': 12.4, 'learning_objects': 95.1}.",
+      "title": "Timings",
+      "type": "object"
+    }
+  },
+  "required": [
+    "learning_objects",
+    "question_map",
+    "quality",
+    "warnings",
+    "timings"
+  ],
+  "title": "Report",
+  "type": "object"
+}

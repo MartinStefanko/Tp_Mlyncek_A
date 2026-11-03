@@ -110,7 +110,7 @@ def generate_lo_pipeline(
         return []
 
     generation_start = time.perf_counter()
-    los = cluster_by_core(los)
+    los = cluster_by_core(los, client=client)
     los.sort(key=lo_page_sort_key)
     for i, obj in enumerate(los, start=1):
         obj["id"] = i
