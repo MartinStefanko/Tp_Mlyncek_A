@@ -7,19 +7,33 @@ RecordingClient as `llm` and `embedder` (step 6: the LLM interface) so every LLM
 is stored in JSONL. The pipeline returns its reports; this tool writes them (with the
 writers in qgen/cli.py).
 
-Usage (from the repo root):
-    venv/Scripts/python.exe tools/baseline.py tests/fixtures/eko.pdf [more.pdf ...] [--out baseline]
+Models: by default every role takes its model from the settings (.env / environment,
+get_settings()), like the CLI: QGEN_LLM_MODEL, _LO, _QUESTIONS, _EVAL and QGEN_EMBED_MODEL.
+--app-models uses the fixed models of the former app.py instead (APP_MODELS; Gemini 2.5,
+which Google no longer offers to new users). Provider and keys always come from the
+settings. Thresholds, batch sizes and attempts stay at the code defaults (= app.py values),
+so .env cannot change them. Before the run the tool prints the model of every role and
+calls factory.check_config().
 
-Outputs in --out (default: baseline/):
+The committed baseline/ is the reference of the replay tests; --out pointing at it is
+refused unless --force is given.
+
+Usage (from the repo root):
+    venv/Scripts/python.exe tools/baseline.py tests/fixtures/eko.pdf [more.pdf ...] --out baseline_v2
+        [--app-models] [--force]
+
+Outputs in --out:
     llm_calls.jsonl                    recording of all LLM and embedding calls
     segments.json                      extracted pages (pipeline input after extraction)
     learning_objects.json / _all.json  final / all LO (same JSON export as the former app.py)
     questions.json / _all.json         final / all items (same JSON export as the former app.py)
     reports/                           the pipeline reports as text files
-    metrics.json                       summary metrics taken from those reports
+    metrics.json                       summary metrics taken from those reports, plus the
+                                       models of every role, run date and git commit ("run")
 """
 
 import argparse
+import subprocess
 import hashlib
 import json
 import os
@@ -35,19 +49,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import qgen.llm.factory as llm_factory  # noqa: E402
 from qgen.cli import save_learning_objects_json, save_questions_json, write_reports  # noqa: E402
 from qgen.config import Settings, get_settings  # noqa: E402
+from qgen.llm.errors import LLMConfigError  # noqa: E402
 from qgen.extraction.text_extraction import pdfs_to_text  # noqa: E402
 from qgen.lo.pipeline import generate_lo_pipeline  # noqa: E402
 from qgen.questions.pipeline import generate_all_items  # noqa: E402
 from recording_client import RecordingClient  # noqa: E402
 
-# Same values as the former Hlavna_cast/app.py
-LO_GENERATION_MODEL = "gemini-2.5-flash-lite"
-LO_PREREQ_MODEL = "gemini-2.5-flash-lite"
-ITEM_GENERATION_MODEL = "gemini-2.5-flash-lite"
-ITEM_EVALUATION_MODEL = "gemini-2.5-flash"
+# Fixed models of the former Hlavna_cast/app.py (--app-models), by Settings field.
+APP_MODELS = {
+    "llm_model": "gemini-2.5-flash-lite",            # checks: topics, faithfulness, answerability
+    "llm_model_lo": "gemini-2.5-flash-lite",         # language, LO generation, prerequisites
+    "llm_model_questions": "gemini-2.5-flash-lite",  # question generation
+    "llm_model_eval": "gemini-2.5-flash",            # question quality score
+    "embed_model": "gemini-embedding-001",
+}
+MODEL_FIELDS = tuple(APP_MODELS)
+# Same values as the former Hlavna_cast/app.py (= code defaults of qgen.config).
 ITEM_EVALUATION_BATCH_SIZE = 20
 LO_BATCH_SIZE = 10
 ITEM_BATCH_SIZE = 10
+REFERENCE_BASELINE_DIR = REPO_ROOT / "baseline"
 
 class UnexpectedClientCreation(RuntimeError):
     pass
@@ -69,11 +90,60 @@ def install_client_guard() -> dict:
     return original
 
 
+def select_models(env_settings: Settings, app_models: bool) -> dict:
+    """Model of every Settings model field: from the settings, or APP_MODELS."""
+    if app_models:
+        return dict(APP_MODELS)
+    return {field: getattr(env_settings, field) for field in MODEL_FIELDS}
+
+
+def models_by_role(settings: Settings) -> dict:
+    """Model of every factory role, plus "embed"."""
+    roles = {role: llm_factory.model_for_role(role, settings) for role in llm_factory.ROLES}
+    roles[llm_factory.EMBED_ROLE] = settings.embed_model
+    return roles
+
+
+def is_reference_baseline(out_dir: Path) -> bool:
+    return Path(out_dir).resolve() == REFERENCE_BASELINE_DIR.resolve()
+
+
+def git_version(repo: Path = REPO_ROOT) -> dict:
+    """Commit of the code that made the run; dirty = uncommitted changes in tracked files."""
+    def git(*args):
+        result = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip())
+        return result.stdout.strip()
+
+    try:
+        return {
+            "commit": git("rev-parse", "HEAD"),
+            "dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
+        }
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return {"commit": None, "dirty": None}
+
+
+def run_info(run_settings: Settings, models_source: str, started_at: datetime, version: dict) -> dict:
+    """Which run the metrics belong to: date, code version, providers and models per role."""
+    return {
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "git_commit": version.get("commit"),
+        "git_dirty": version.get("dirty"),
+        "models_source": models_source,
+        "llm_provider": run_settings.llm_provider,
+        "embed_provider": run_settings.embed_provider,
+        "models_by_role": models_by_role(run_settings),
+    }
+
+
 def stats_of(reports: dict, name: str) -> dict:
     return (reports.get(name) or {}).get("stats", {}) or {}
 
 
-def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, timings, recorder):
+def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, timings, recorder,
+                  pipeline_settings: Settings, run: dict):
     coverage = stats_of(reports, "topic_coverage")
     lo_faith = stats_of(reports, "lo_faithfulness")
     lo_rel = stats_of(reports, "lo_relevance_to_segment")
@@ -92,12 +162,14 @@ def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, 
 
     return {
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "run": run,
         "inputs": inputs,
+        # Same keys as the reference baseline/metrics.json (read by the replay tests).
         "models": {
-            "lo_generation": LO_GENERATION_MODEL,
-            "lo_prerequisites": LO_PREREQ_MODEL,
-            "item_generation": ITEM_GENERATION_MODEL,
-            "item_evaluation": ITEM_EVALUATION_MODEL,
+            "lo_generation": pipeline_settings.llm_model_lo,
+            "lo_prerequisites": pipeline_settings.llm_model_lo,
+            "item_generation": pipeline_settings.llm_model_questions,
+            "item_evaluation": pipeline_settings.llm_model_eval,
             "item_evaluation_batch_size": ITEM_EVALUATION_BATCH_SIZE,
             "lo_batch_size": LO_BATCH_SIZE,
             "item_batch_size": ITEM_BATCH_SIZE,
@@ -156,28 +228,54 @@ def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("pdfs", nargs="+", help="Input PDF file(s), e.g. tests/fixtures/eko.pdf")
-    parser.add_argument("--out", default=str(REPO_ROOT / "baseline"), help="Output directory (default: baseline/)")
+    parser.add_argument("--out", required=True,
+                        help="Output directory, e.g. baseline_v2 (baseline/ only with --force)")
+    parser.add_argument("--app-models", action="store_true",
+                        help="Use the fixed models of the former app.py (Gemini 2.5) instead of the settings.")
+    parser.add_argument("--force", action="store_true", help="Allow --out to be the reference baseline/.")
     args = parser.parse_args(argv)
+
+    if is_reference_baseline(Path(args.out)) and not args.force:
+        parser.error(
+            f"--out {args.out} is the reference baseline of the replay tests; "
+            "choose another folder (e.g. baseline_v2) or add --force to overwrite it."
+        )
 
     pdf_paths = [str(Path(p).resolve()) for p in args.pdfs]
     for p in pdf_paths:
         if not Path(p).is_file():
             parser.error(f"File not found: {p}")
 
+    # Provider and keys from .env / environment; models from there too, or APP_MODELS.
+    env_settings = get_settings()
+    models = select_models(env_settings, args.app_models)
+    run_settings = env_settings.model_copy(update=models)
+    # Pipeline parameters: code defaults (= app.py values) plus the chosen models.
+    settings = Settings.model_construct(**models)
+
+    source = "app.py (--app-models)" if args.app_models else "settings (.env / environment)"
+    print(f"Models from {source}; LLM provider {run_settings.llm_provider}, "
+          f"embedding provider {run_settings.embed_provider}:")
+    for role, model in models_by_role(settings).items():
+        print(f"  {role:<10} {model}")
+    try:
+        llm_factory.check_config(run_settings)
+    except LLMConfigError as error:
+        print(f"Configuration error: {error}", file=sys.stderr)
+        return 2
+
+    run = run_info(run_settings, "app" if args.app_models else "settings", datetime.now(timezone.utc), git_version())
+
     out_dir = Path(args.out).resolve()
     reports_dir = out_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    # Real clients via the pipeline's own factory (provider and keys from .env / environment).
-    env_settings = get_settings()
     client = RecordingClient(
-        llm_factory.get_llm("lo", env_settings), llm_factory.get_embedder(env_settings), out_dir / "llm_calls.jsonl"
+        llm_factory.get_llm("lo", run_settings), llm_factory.get_embedder(run_settings), out_dir / "llm_calls.jsonl"
     )
 
     reports: dict = {}
     lo_report, item_report = None, None
-    # Code defaults only (same values as the former app.py); .env must not change the baseline.
-    settings = Settings.model_construct()
     original_factory = install_client_guard()
 
     timings: dict = {}
@@ -197,8 +295,8 @@ def main(argv=None) -> int:
         lo_result = generate_lo_pipeline(
             segments,
             batch_size=LO_BATCH_SIZE,
-            generation_model=LO_GENERATION_MODEL,
-            prerequisites_model=LO_PREREQ_MODEL,
+            generation_model=settings.llm_model_lo,
+            prerequisites_model=settings.llm_model_lo,
             llm=client,
             embedder=client,
             verbose=True,
@@ -219,8 +317,8 @@ def main(argv=None) -> int:
                 segments,
                 batch_size=ITEM_BATCH_SIZE,
                 evaluation_batch_size=ITEM_EVALUATION_BATCH_SIZE,
-                generation_model=ITEM_GENERATION_MODEL,
-                evaluation_model=ITEM_EVALUATION_MODEL,
+                generation_model=settings.llm_model_questions,
+                evaluation_model=settings.llm_model_eval,
                 llm=client,
                 embedder=client,
                 verbose=True,
@@ -238,7 +336,9 @@ def main(argv=None) -> int:
         llm_factory.get_embedder = original_factory["get_embedder"]
         client.close()
 
-    metrics = build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, timings, client.recorder)
+    metrics = build_metrics(
+        args, pdf_paths, reports, lo_report, item_report, los, items, timings, client.recorder, settings, run
+    )
     with open(out_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
 
