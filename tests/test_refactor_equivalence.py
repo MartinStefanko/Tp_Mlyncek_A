@@ -1,48 +1,22 @@
-"""Step 4: moving Hlavna_cast/ into qgen/ must not change the pipeline results.
+"""Replay of the reference recording baseline_v3/: the pipeline must give the same results.
 
-Step 5 changed only how the results are returned (result dataclasses instead of files in
-output_dir) and where the settings come from; the expected values stay the same.
-
-Runs the LO pipeline and the question pipeline on baseline/segments.json (no PDF, no OCR)
-with the replay client and compares the results with the baseline outputs. The only
-allowed differences are listed in tests/recording_transforms.py.
+Runs the LO pipeline and the question pipeline on baseline_v3/segments.json (no PDF, no
+OCR) with the replay client, with the same arguments as tools/baseline.py, and compares the
+results with the recorded outputs. Every prompt must be byte-identical to the recording: a
+changed prompt is a call that is not in the recording (UnrecordedCallError), and every
+recorded call must be used.
 
 The recording is not in git. When it is missing, the test is skipped.
-
-Skipped for now: the generation prompts changed (minimum of questions per section,
-coverage of all sections), so the gemini-2.5 recording no longer matches. The test is not
-adapted to pass; it waits for the new reference recording baseline_v3.
 """
 
 import json
-from pathlib import Path
 
 import pytest
 
 from qgen.cli import normalize_lo_for_export
 from qgen.lo.pipeline import generate_lo_pipeline
 from qgen.questions.pipeline import generate_all_items
-from tests.baseline_data import AWAITING_BASELINE_V3, baseline_settings
-from tests.recording_transforms import REMOVED_CALL_MARKERS, REMOVED_ITEM_FIELDS, step4_transforms
-from tests.replay_client import ReplayClient
-
-pytestmark = pytest.mark.skip(reason=AWAITING_BASELINE_V3)
-
-BASELINE_DIR = Path(__file__).resolve().parent.parent / "baseline"
-REQUIRED_FILES = (
-    "llm_calls.jsonl",
-    "segments.json",
-    "metrics.json",
-    "learning_objects.json",
-    "learning_objects_all.json",
-    "questions.json",
-    "questions_all.json",
-)
-
-
-def _load_json(name):
-    with open(BASELINE_DIR / name, encoding="utf-8") as f:
-        return json.load(f)
+from tests.baseline_data import baseline_settings, load_json, replay_client, require_baseline
 
 
 def _as_json(value):
@@ -50,21 +24,14 @@ def _as_json(value):
     return json.loads(json.dumps(value, ensure_ascii=False))
 
 
-def _without_removed_fields(items):
-    return [{k: v for k, v in item.items() if k not in REMOVED_ITEM_FIELDS} for item in items]
-
-
 @pytest.fixture(scope="module")
 def replay_run():
-    missing = [name for name in REQUIRED_FILES if not (BASELINE_DIR / name).is_file()]
-    if missing:
-        pytest.skip(f"Baseline recording is missing locally: {', '.join(missing)}")
-
-    models = _load_json("metrics.json")["models"]
-    segments = _load_json("segments.json")
-    client = ReplayClient(BASELINE_DIR / "llm_calls.jsonl", transforms=step4_transforms())
-    # Code defaults plus the baseline models (explicit, independent of the model inheritance);
-    # a local .env or QGEN_* variables must not change the baseline run.
+    require_baseline()
+    models = load_json("metrics.json")["models"]
+    segments = load_json("segments.json")
+    client = replay_client()
+    # Code defaults plus the recorded models (explicit); a local .env or QGEN_* variables
+    # must not change the replay.
     settings = baseline_settings()
     assert settings.llm_model_eval == models["item_evaluation"]
 
@@ -78,7 +45,7 @@ def replay_run():
         verbose=False,
         settings=settings,
     )
-    items, all_items = [], []
+    items, all_items, item_reports = [], [], {}
     if lo_result.learning_objects:
         item_result = generate_all_items(
             lo_result.learning_objects,
@@ -92,45 +59,46 @@ def replay_run():
             verbose=False,
             settings=settings,
         )
-        items, all_items = item_result.questions, item_result.all_questions
+        items, all_items, item_reports = item_result.questions, item_result.all_questions, item_result.reports
     return {
         "client": client,
         "los": lo_result.learning_objects,
         "all_los": lo_result.all_learning_objects,
         "items": items,
         "all_items": all_items,
+        "reports": {**lo_result.reports, **item_reports},
     }
 
 
 def test_learning_objects_match_baseline(replay_run):
     accepted = _as_json([normalize_lo_for_export(lo) for lo in replay_run["los"]])
     all_los = _as_json([normalize_lo_for_export(lo) for lo in replay_run["all_los"]])
-    assert accepted == _load_json("learning_objects.json")
-    assert all_los == _load_json("learning_objects_all.json")
+    assert accepted == load_json("learning_objects.json")
+    assert all_los == load_json("learning_objects_all.json")
 
 
 def test_questions_match_baseline(replay_run):
-    assert _as_json(replay_run["items"]) == _without_removed_fields(_load_json("questions.json"))
-    assert _as_json(replay_run["all_items"]) == _without_removed_fields(
-        _load_json("questions_all.json")
-    )
+    assert _as_json(replay_run["items"]) == load_json("questions.json")
+    assert _as_json(replay_run["all_items"]) == load_json("questions_all.json")
 
 
-def test_questions_have_no_removed_fields(replay_run):
-    for item in replay_run["items"] + replay_run["all_items"]:
-        assert not set(REMOVED_ITEM_FIELDS) & set(item), item.get("id")
+def test_counts_match_metrics(replay_run):
+    counts = load_json("metrics.json")["counts"]
+    assert len(replay_run["all_los"]) == counts["los_all"]
+    assert len(replay_run["los"]) == counts["los_accepted"]
+    assert len(replay_run["all_items"]) == counts["items_all"]
+    assert len(replay_run["items"]) == counts["items_accepted"]
 
 
-def test_only_removed_calls_are_unused(replay_run):
+def test_diagnostics_match_metrics(replay_run):
+    metrics = load_json("metrics.json")
+    assert _as_json(replay_run["reports"]["section_diagnostics"]) == metrics["section_diagnostics"]
+    question_diagnostics = {
+        k: v for k, v in replay_run["reports"]["question_diagnostics"].items() if k != "sections_without_content"
+    }
+    assert _as_json(question_diagnostics) == metrics["question_diagnostics"]
+
+
+def test_every_recorded_call_is_used(replay_run):
     unused = replay_run["client"].unused_records()
-    unexpected = [
-        r for r in unused
-        if not (isinstance(r["contents"], str) and any(m in r["contents"] for m in REMOVED_CALL_MARKERS))
-    ]
-    assert unexpected == [], [(r["seq"], r["method"], r["model"]) for r in unexpected]
-    assert unused, "the removed Python classification call should be left unused"
-
-
-def test_every_transform_was_applied(replay_run):
-    for transform in replay_run["client"].transforms:
-        assert transform.hits > 0, f"transform {transform.name} changed nothing in the recording"
+    assert unused == [], [(r["seq"], r["method"], r["model"]) for r in unused]

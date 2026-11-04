@@ -15,8 +15,9 @@ settings. Thresholds, batch sizes and attempts stay at the code defaults (= app.
 so .env cannot change them. Before the run the tool prints the model of every role and
 calls factory.check_config().
 
-The committed baseline/ is the reference of the replay tests; --out pointing at it is
-refused unless --force is given.
+Protected recordings: baseline_v3/ is the reference of the replay tests, baseline/
+(gemini-2.5) the historical record. --out pointing at one of them is refused unless
+--force is given.
 
 Usage (from the repo root):
     venv/Scripts/python.exe tools/baseline.py tests/fixtures/eko.pdf [more.pdf ...] --out baseline_v2
@@ -68,7 +69,9 @@ MODEL_FIELDS = tuple(APP_MODELS)
 ITEM_EVALUATION_BATCH_SIZE = 20
 LO_BATCH_SIZE = 10
 ITEM_BATCH_SIZE = 10
-REFERENCE_BASELINE_DIR = REPO_ROOT / "baseline"
+# Recordings that must not be overwritten by accident: the reference of the replay tests
+# (baseline_v3/) and the historical gemini-2.5 record (baseline/).
+PROTECTED_BASELINE_DIRS = (REPO_ROOT / "baseline_v3", REPO_ROOT / "baseline")
 
 class UnexpectedClientCreation(RuntimeError):
     pass
@@ -105,7 +108,8 @@ def models_by_role(settings: Settings) -> dict:
 
 
 def is_reference_baseline(out_dir: Path) -> bool:
-    return Path(out_dir).resolve() == REFERENCE_BASELINE_DIR.resolve()
+    out = Path(out_dir).resolve()
+    return any(out == protected.resolve() for protected in PROTECTED_BASELINE_DIRS)
 
 
 def git_version(repo: Path = REPO_ROOT) -> dict:
@@ -164,7 +168,7 @@ def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, 
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "run": run,
         "inputs": inputs,
-        # Same keys as the reference baseline/metrics.json (read by the replay tests).
+        # Same keys as baseline_v3/metrics.json (read by the replay tests).
         "models": {
             "lo_generation": pipeline_settings.llm_model_lo,
             "lo_prerequisites": pipeline_settings.llm_model_lo,
@@ -236,16 +240,17 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("pdfs", nargs="+", help="Input PDF file(s), e.g. tests/fixtures/eko.pdf")
     parser.add_argument("--out", required=True,
-                        help="Output directory, e.g. baseline_v2 (baseline/ only with --force)")
+                        help="Output directory, e.g. baseline_v4 (baseline/ and baseline_v3/ only with --force)")
     parser.add_argument("--app-models", action="store_true",
                         help="Use the fixed models of the former app.py (Gemini 2.5) instead of the settings.")
-    parser.add_argument("--force", action="store_true", help="Allow --out to be the reference baseline/.")
+    parser.add_argument("--force", action="store_true",
+                        help="Allow --out to be a protected recording (baseline/, baseline_v3/).")
     args = parser.parse_args(argv)
 
     if is_reference_baseline(Path(args.out)) and not args.force:
         parser.error(
-            f"--out {args.out} is the reference baseline of the replay tests; "
-            "choose another folder (e.g. baseline_v2) or add --force to overwrite it."
+            f"--out {args.out} is a protected recording (baseline_v3/ = reference of the replay tests, "
+            "baseline/ = historical record); choose another folder (e.g. baseline_v4) or add --force."
         )
 
     pdf_paths = [str(Path(p).resolve()) for p in args.pdfs]

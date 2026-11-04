@@ -1,5 +1,6 @@
 """tools/baseline.py: models from the settings or --app-models, start-up check, run info in
-metrics.json and protection of the reference baseline/. No network, no pipeline run."""
+metrics.json and protection of the recordings baseline_v3/ (reference) and baseline/
+(historical). No network, no pipeline run."""
 
 import importlib.util
 from collections import Counter
@@ -45,16 +46,6 @@ def test_app_models_keep_the_former_fixed_models(baseline):
     assert models["llm_model_lo"] == "gemini-2.5-flash-lite" and models["llm_model_eval"] == "gemini-2.5-flash"
 
 
-def test_app_models_match_the_reference_baseline(baseline):
-    """--app-models reproduces the models of the committed baseline/metrics.json."""
-    from tests.baseline_data import baseline_models
-
-    if not (REPO / "baseline" / "metrics.json").is_file():
-        pytest.skip("baseline/metrics.json is missing")
-    expected = baseline_models()
-    assert {k: v for k, v in baseline.APP_MODELS.items() if k in expected} == expected
-
-
 def test_models_by_role_lists_every_role_and_embed(baseline):
     s = Settings.model_construct(llm_model="base", llm_model_questions="q", llm_model_eval="ev", embed_model="emb")
     roles = baseline.models_by_role(s)
@@ -65,13 +56,15 @@ def test_models_by_role_lists_every_role_and_embed(baseline):
 def test_reference_baseline_is_detected(baseline, tmp_path):
     assert baseline.is_reference_baseline(REPO / "baseline")
     assert baseline.is_reference_baseline(REPO / "tools" / ".." / "baseline")
+    assert baseline.is_reference_baseline(REPO / "baseline_v3")
     assert not baseline.is_reference_baseline(REPO / "baseline_v2")
     assert not baseline.is_reference_baseline(tmp_path)
 
 
-def test_out_baseline_is_refused_without_force(baseline, capsys):
+@pytest.mark.parametrize("folder", ["baseline", "baseline_v3"])
+def test_out_protected_recording_is_refused_without_force(baseline, capsys, folder):
     with pytest.raises(SystemExit) as info:
-        baseline.main([str(REPO / "tests" / "fixtures" / "eko.pdf"), "--out", str(REPO / "baseline")])
+        baseline.main([str(REPO / "tests" / "fixtures" / "eko.pdf"), "--out", str(REPO / folder)])
     assert info.value.code == 2
     assert "--force" in capsys.readouterr().err
 
@@ -121,6 +114,6 @@ def test_metrics_contain_the_run_info(baseline, tmp_path):
         "models_by_role": {"lo": "base", "prereq": "base", "questions": "base", "eval": "ev",
                            "check": "base", "topics": "base", "split": "base", "embed": "emb"},
     }
-    # Same keys as the reference baseline/metrics.json, now with the models actually used.
+    # Same keys as baseline_v3/metrics.json, with the models actually used.
     assert metrics["models"]["lo_generation"] == "base" and metrics["models"]["item_evaluation"] == "ev"
     assert metrics["models"]["lo_batch_size"] == 10

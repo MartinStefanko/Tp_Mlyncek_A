@@ -16,12 +16,10 @@ from qgen.extraction.text_extraction import pdfs_to_text
 from qgen.pipeline import run_pipeline
 from qgen.progress import PIPELINE_STAGES, SubProgress, batch_count
 from tests.baseline_data import (
-    AWAITING_BASELINE_V3,
     baseline_settings,
     load_json,
     replay_client,
     require_baseline,
-    without_removed_fields,
 )
 
 EKO_PDF = Path(__file__).resolve().parent / "fixtures" / "eko.pdf"
@@ -58,8 +56,6 @@ def test_pipeline_stages_are_job_stages():
 
 @pytest.fixture(scope="module")
 def replay_progress():
-    # Replays the gemini-2.5 recording, whose generation prompts are the old ones.
-    pytest.skip(AWAITING_BASELINE_V3)
     require_baseline()
     recorder = Recorder()
     client = replay_client()
@@ -112,7 +108,7 @@ def test_progress_counts_batches(replay_progress):
 def test_callback_does_not_change_results(replay_progress):
     _, result = replay_progress
     assert [normalize_lo_for_export(lo) for lo in result.learning_objects] == load_json("learning_objects.json")
-    assert result.questions == without_removed_fields(load_json("questions.json"))
+    assert result.questions == load_json("questions.json")
 
 
 def test_extraction_reports_pages():

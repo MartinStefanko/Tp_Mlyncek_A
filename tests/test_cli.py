@@ -10,13 +10,11 @@ import qgen.cli as cli
 from qgen.config import Settings
 from qgen.progress import STAGE_EXTRACT
 from tests.baseline_data import (
-    AWAITING_BASELINE_V3,
     BASELINE_DIR,
     baseline_settings,
     load_json,
     replay_client,
     require_baseline,
-    without_removed_fields,
 )
 
 EKO_PDF = Path(__file__).resolve().parent / "fixtures" / "eko.pdf"
@@ -31,6 +29,8 @@ STABLE_REPORTS = (
     "item_relevance_to_lo_report.txt",
     "item_faithfulness_report.txt",
     "item_answerability_report.txt",
+    "section_diagnostics.json",
+    "question_diagnostics.json",
 )
 ALL_REPORTS = STABLE_REPORTS + (
     "item_validation_report.txt",
@@ -45,7 +45,7 @@ def _read_json(path):
 
 @pytest.fixture
 def baseline_segments_extraction(monkeypatch):
-    """Replace PDF extraction by baseline/segments.json (the recording starts after extraction)."""
+    """Replace PDF extraction by baseline_v3/segments.json (the recording starts after extraction)."""
     calls = []
 
     def fake_pdfs_to_text(pdf_inputs, ocr=None, progress_callback=None, settings=None):
@@ -60,7 +60,6 @@ def baseline_segments_extraction(monkeypatch):
     return calls
 
 
-@pytest.mark.skip(reason=AWAITING_BASELINE_V3)  # replays the gemini-2.5 recording (old prompts)
 def test_cli_writes_results_and_reports(tmp_path, capsys, baseline_segments_extraction):
     require_baseline()
     out = tmp_path / "out"
@@ -71,8 +70,8 @@ def test_cli_writes_results_and_reports(tmp_path, capsys, baseline_segments_extr
     assert _read_json(out / "segments.json") == load_json("segments.json")
     assert _read_json(out / "learning_objects.json") == load_json("learning_objects.json")
     assert _read_json(out / "learning_objects_all.json") == load_json("learning_objects_all.json")
-    assert _read_json(out / "questions.json") == without_removed_fields(load_json("questions.json"))
-    assert _read_json(out / "questions_all.json") == without_removed_fields(load_json("questions_all.json"))
+    assert _read_json(out / "questions.json") == load_json("questions.json")
+    assert _read_json(out / "questions_all.json") == load_json("questions_all.json")
 
     written = sorted(p.name for p in (out / "reports").iterdir())
     assert written == sorted(ALL_REPORTS)

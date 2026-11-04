@@ -31,6 +31,9 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 ## Cieľ generovania a referenčná nahrávka
 - Cieľ generovania: čo najviac otázok, pokrytie všetkých tematických celkov.
   per_section je minimum, nie strop.
-- Referenčná nahrávka bude baseline_v3 (gemini-3.1-flash-lite + gemini-3.5-flash).
-  Do jej nahratia sú replay testy na nahrávke gemini-2.5 v baseline/ preskočené
-  (prompty generovania sa zmenili).
+- Replay testy (test ekvivalencie, test_cli, test_progress) stoja na referenčnej nahrávke
+  baseline_v3/ (gemini-3.1-flash-lite + gemini-3.5-flash, commit 42a7cd1). Očakávané hodnoty
+  a modely (tests/baseline_data.py) sa berú iba z jej súborov; v gite je len metrics.json,
+  bez lokálnej nahrávky sa testy preskočia. Zmena promptu = nová nahrávka (tools/baseline.py),
+  nie úprava testov.
+- baseline/ (gemini-2.5) je iba historický záznam; žiadny test ho nepoužíva.

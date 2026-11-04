@@ -88,16 +88,18 @@ def test_env_example_matches_the_code_defaults(clean_env):
 
 
 def test_replay_settings_keep_the_baseline_models(clean_env):
-    """The gemini-2.5 replay tests do not rely on the code defaults: baseline_settings()
-    passes the models of baseline/metrics.json explicitly."""
-    from tests.baseline_data import BASELINE_CHECK_MODEL, baseline_settings
+    """The replay tests do not rely on the code defaults: baseline_settings() passes the
+    models of baseline_v3/metrics.json explicitly."""
+    from tests.baseline_data import baseline_settings
 
-    metrics_path = REPO_ROOT / "baseline" / "metrics.json"
+    metrics_path = REPO_ROOT / "baseline_v3" / "metrics.json"
     if not metrics_path.is_file():
-        pytest.skip("baseline/metrics.json is missing")
-    models = json.loads(metrics_path.read_text(encoding="utf-8"))["models"]
+        pytest.skip("baseline_v3/metrics.json is missing")
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    models, roles = metrics["models"], metrics["run"]["models_by_role"]
     s = baseline_settings()
-    assert s.llm_model == BASELINE_CHECK_MODEL
+    assert s.llm_model == roles["check"] == roles["topics"]
+    assert s.embed_model == roles["embed"]
     assert s.llm_model_lo == models["lo_generation"] == models["lo_prerequisites"]
     assert s.llm_model_questions == models["item_generation"]
     assert s.llm_model_eval == models["item_evaluation"]

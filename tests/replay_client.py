@@ -12,7 +12,8 @@ recorded more than once, the answers are returned in the recorded order. A call 
 recorded answer raises ``UnrecordedCallError`` with a preview of the prompt.
 
 Optional ``transforms`` change the recorded inputs before the key is computed. They let a
-test accept a deliberate, named change in a prompt (see ``tests/recording_transforms.py``).
+test accept a deliberate, named change in a prompt (the step 4 transforms of the former
+gemini-2.5 baseline/ were removed with it; the replay tests on baseline_v3/ use none).
 
 Recorded failures: an ``error`` record raises a retryable ``ProviderError`` (as a transient
 API error would); a ``text_error`` record (blocked / empty answer) gives text "".
