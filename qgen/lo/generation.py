@@ -2,17 +2,23 @@
 
 from qgen.context_builder import format_segment_label, make_source_ref
 from qgen.llm.json_load import safe_load_json
+from qgen.config import setting_or_default
 from qgen.llm.client import generate_with_retry
+from qgen.progress import STAGE_LEARNING_OBJECTS, batch_count, report_progress
 
 
 def generate_learning_objects(
     segmenty,
-    batch_size=10,
-    model="gemini-2.5-flash-lite",
+    batch_size=None,
+    model=None,
     client=None,
     verbose=True,
     document_language="sk",
+    progress_callback=None,
 ):
+    batch_size = setting_or_default(batch_size, "lo_batch_size")
+    model = setting_or_default(model, "llm_model_lo")
+    total_batches = batch_count(len(segmenty), batch_size)
     vsetky_lo = []
     next_id = 1
 
@@ -22,6 +28,7 @@ def generate_learning_objects(
     start_total = time.perf_counter()
     batch_num = 1
     for start in range(0, len(segmenty), batch_size):
+        report_progress(progress_callback, STAGE_LEARNING_OBJECTS, start // batch_size, total_batches)
         batch = segmenty[start:start + batch_size]
         parts = []
         start_batch = time.perf_counter()
@@ -140,6 +147,7 @@ def generate_learning_objects(
         for obj in parsed_seg:
             vsetky_lo.append(obj)
 
+    report_progress(progress_callback, STAGE_LEARNING_OBJECTS, total_batches, total_batches)
     end_total = time.perf_counter()
     if verbose:
         print(f"Generovanie LO dokončené. Celkový počet LO: {len(vsetky_lo)}")

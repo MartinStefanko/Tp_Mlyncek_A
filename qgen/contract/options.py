@@ -140,8 +140,9 @@ class JobOptions(_OptionsModel):
 class OptionDefaults:
     """Values used for options the caller did not send (Príloha A, Príloha D).
 
-    The defaults here are the documented ones; the service builds this object from
-    its configuration (QGEN_OCR_ENABLED, QGEN_DEFAULT_LESSON_MINUTES, ...).
+    The defaults here are the documented ones; the configuration builds this object
+    with `qgen.config.Settings.option_defaults()` (QGEN_OCR_ENABLED,
+    QGEN_DEFAULT_LESSON_MINUTES).
     """
 
     language: Language = "auto"

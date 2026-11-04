@@ -1,12 +1,18 @@
 from qgen.llm.json_load import safe_load_json
+from typing import Optional
+
+from qgen.config import Settings, setting_or_default
 from qgen.llm.client import generate_with_retry
+from qgen.progress import STAGE_LANGUAGE, ProgressCallback, report_progress
 
 
 SUPPORTED_DOCUMENT_LANGUAGES = {"sk", "en"}
+LANGUAGE_FROM_OPTION_REASON = "Language set by the 'language' option; detection skipped."
 
 
-def detect_document_language(segmenty, client=None, model="gemini-2.5-flash-lite", verbose=True):
-    source_text = build_full_document_text(segmenty)
+def detect_document_language(segmenty, client=None, model=None, verbose=True, max_chars=None):
+    model = setting_or_default(model, "llm_model_lo")
+    source_text = build_full_document_text(segmenty, max_chars=max_chars)
     if not source_text.strip():
         return {"language": "sk", "reason": "Dokument nema text pre klasifikaciu."}
 
@@ -69,7 +75,8 @@ def heuristic_language_fallback(text, reason_prefix):
     }
 
 
-def build_full_document_text(segmenty, max_chars=12000):
+def build_full_document_text(segmenty, max_chars=None):
+    max_chars = setting_or_default(max_chars, "language_sample_max_chars")
     parts = []
     total = 0
     for seg in segmenty:
@@ -83,3 +90,30 @@ def build_full_document_text(segmenty, max_chars=12000):
         parts.append(chunk)
         total += len(chunk)
     return "\n\n".join(parts)
+
+
+def resolve_document_language(
+    segmenty,
+    document_language: Optional[str],
+    client,
+    model: str,
+    settings: Settings,
+    verbose: bool,
+    progress_callback: Optional[ProgressCallback],
+) -> dict:
+    """Language of the document: from the option (sk/en) or detected by the LLM (None/auto)."""
+    report_progress(progress_callback, STAGE_LANGUAGE, 0, 1)
+    if document_language in (None, "auto"):
+        language_info = detect_document_language(
+            segmenty,
+            client=client,
+            model=model,
+            verbose=verbose,
+            max_chars=settings.language_sample_max_chars,
+        )
+    elif document_language in SUPPORTED_DOCUMENT_LANGUAGES:
+        language_info = {"language": document_language, "reason": LANGUAGE_FROM_OPTION_REASON}
+    else:
+        raise ValueError(f"Unsupported document language: {document_language!r} (allowed: auto, sk, en).")
+    report_progress(progress_callback, STAGE_LANGUAGE, 1, 1)
+    return language_info

@@ -1,0 +1,141 @@
+"""Central configuration (Príloha D – Konfigurácia) from the environment and `.env`.
+
+Every variable has the prefix QGEN_, except the vendor keys GEMINI_API_KEY and
+ANTHROPIC_API_KEY. This is the only module that reads the environment.
+
+The pipeline gets a `Settings` object as a parameter; code that has none uses
+`get_settings()` (one cached instance per process).
+
+Model defaults are the models the code uses today (baseline: gemini-2.5-flash-lite,
+question scoring gemini-2.5-flash), not gemini-4-argon from the specification. A model
+change is a separate decision and needs a new baseline.
+
+Model roles:
+    QGEN_LLM_MODEL            checks: topic extraction, LO faithfulness, question
+                              faithfulness and answerability
+    QGEN_LLM_MODEL_LO         language detection in the LO pipeline, LO generation,
+                              prerequisites
+    QGEN_LLM_MODEL_QUESTIONS  language detection in the question pipeline, question generation
+    QGEN_LLM_MODEL_EVAL       question quality score (1–5)
+"""
+
+from functools import lru_cache
+from typing import Literal, Optional
+
+from pydantic import AliasChoices, Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from qgen.contract.options import OptionDefaults
+
+LlmProvider = Literal["gemini", "openai_compatible", "anthropic"]
+EmbedProvider = Literal["gemini", "openai_compatible"]
+
+
+def _split_list(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="QGEN_",
+        env_file=".env",
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    # --- LLM -----------------------------------------------------------------------
+    llm_provider: LlmProvider = "gemini"
+    llm_base_url: Optional[str] = Field(default=None, description="openai_compatible: server address.")
+    llm_api_key: SecretStr = Field(default=SecretStr(""), description="openai_compatible: key.")
+    gemini_api_key: SecretStr = Field(
+        default=SecretStr(""), validation_alias=AliasChoices("GEMINI_API_KEY", "gemini_api_key")
+    )
+    anthropic_api_key: SecretStr = Field(
+        default=SecretStr(""), validation_alias=AliasChoices("ANTHROPIC_API_KEY", "anthropic_api_key")
+    )
+    llm_model: str = Field(default="gemini-2.5-flash-lite", description="Checks (faithfulness, answerability, topics).")
+    llm_model_lo: str = Field(default="gemini-2.5-flash-lite", description="LO generation, prerequisites.")
+    llm_model_questions: str = Field(default="gemini-2.5-flash-lite", description="Question generation.")
+    llm_model_eval: str = Field(default="gemini-2.5-flash", description="Question quality score.")
+    llm_max_concurrency: int = Field(default=4, ge=1, description="Parallel LLM calls of one worker.")
+
+    # --- Embeddings ------------------------------------------------------------------
+    embed_provider: EmbedProvider = "gemini"
+    embed_base_url: Optional[str] = None
+    embed_model: str = "gemini-embedding-001"
+
+    # --- Pipeline thresholds -----------------------------------------------------------
+    cluster_sim_threshold: float = Field(default=0.82, ge=0, le=1, description="LO clustering (cosine).")
+    cluster_require_source_overlap: bool = Field(default=False, description="Cluster only LO with a shared page.")
+    topic_match_threshold: float = Field(default=0.72, ge=0, le=1, description="Topic covered by an LO (cosine).")
+    lo_min_faithfulness_score: int = Field(default=3, ge=1, le=5, description="LO filter.")
+    question_min_score: int = Field(default=3, ge=1, le=5, description="Question filter: quality score.")
+    question_min_faithfulness_score: int = Field(default=3, ge=1, le=5, description="Question filter.")
+    question_min_answerability_score: int = Field(default=3, ge=1, le=5, description="Question filter.")
+    question_faithful_score: int = Field(default=4, ge=1, le=5, description="Report only: 'faithful' flag.")
+    question_answerable_score: int = Field(default=4, ge=1, le=5, description="Report only: 'answerable' flag.")
+
+    # --- Pipeline batches, attempts and text limits --------------------------------------
+    lo_batch_size: int = Field(default=10, ge=1, description="Pages per LO generation call; LO per faithfulness call.")
+    question_batch_size: int = Field(default=10, ge=1, description="LO per question generation call.")
+    question_eval_batch_size: int = Field(default=20, ge=1, description="Questions per faithfulness/answerability call.")
+    question_generation_attempts: int = Field(default=3, ge=1)
+    question_eval_attempts: int = Field(default=2, ge=1)
+    check_batch_attempts: int = Field(default=2, ge=1, description="Faithfulness / answerability batch attempts.")
+    context_max_chars: int = Field(default=8000, ge=1, description="Source text for one LO or question.")
+    language_sample_max_chars: int = Field(default=12000, ge=1, description="Text for language detection.")
+    topic_source_max_chars: int = Field(default=20000, ge=1, description="Text for topic extraction.")
+
+    # --- Option defaults ------------------------------------------------------------------
+    ocr_enabled: bool = False
+    default_lesson_minutes: int = 45
+
+    # --- Access and input limits --------------------------------------------------------
+    api_keys: SecretStr = Field(default=SecretStr(""), description="Comma-separated keys; empty = no check.")
+    max_files: int = Field(default=10, ge=1)
+    max_upload_mb: float = Field(default=50, gt=0)
+    max_pages: int = Field(default=300, ge=1)
+    max_active_jobs: int = Field(default=10, ge=1)
+
+    # --- Retention ---------------------------------------------------------------------
+    result_ttl_days: float = Field(default=7, gt=0)
+    failed_input_ttl_hours: float = Field(default=24, gt=0)
+
+    # --- Webhooks ----------------------------------------------------------------------
+    webhook_secret: SecretStr = SecretStr("")
+    webhook_allowed_hosts: str = Field(default="", description="Comma-separated hosts; empty = webhooks off.")
+    webhook_timeout_s: float = Field(default=5, gt=0)
+
+    # --- Deployment (read by docker compose; here for /v1/info and completeness) -----------
+    workers: int = Field(default=1, ge=1)
+    local_model: Optional[str] = None
+
+    @property
+    def api_key_list(self) -> list[str]:
+        return _split_list(self.api_keys.get_secret_value())
+
+    @property
+    def allowed_webhook_hosts(self) -> set[str]:
+        return {host.lower() for host in _split_list(self.webhook_allowed_hosts)}
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return int(self.max_upload_mb * 1024 * 1024)
+
+    def option_defaults(self) -> OptionDefaults:
+        return OptionDefaults(ocr=self.ocr_enabled, lesson_minutes=self.default_lesson_minutes)
+
+
+def setting_or_default(value, name: str):
+    """`value`, or the setting `name` from get_settings() when value is None.
+
+    The settings are read only when needed, so a caller that passes every value
+    (the pipelines pass them from their own Settings object) never touches the environment.
+    """
+    return value if value is not None else getattr(get_settings(), name)
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """The process-wide settings. Tests call `get_settings.cache_clear()` after changing env."""
+    return Settings()

@@ -5,23 +5,23 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from qgen.llm.json_load import safe_load_json
 from qgen.context_builder import format_segment_label
+from qgen.config import setting_or_default
 from qgen.llm.client import embed_batch, ensure_client, generate_with_retry
-from qgen.lo.clustering import EMBEDDING_MODEL, normalize_list_field
-
-TOPIC_EXTRACTION_MODEL = "gemini-2.5-flash-lite"
-TOPIC_MATCH_THRESHOLD = 0.72
-MAX_SOURCE_CHARS = 20000
+from qgen.lo.clustering import normalize_list_field
 
 
 def analyze_topic_coverage(
     segmenty,
     los,
     client=None,
-    topic_model: str = TOPIC_EXTRACTION_MODEL,
-    embedding_model: str = EMBEDDING_MODEL,
-    similarity_threshold: float = TOPIC_MATCH_THRESHOLD,
+    topic_model: Optional[str] = None,
+    embedding_model: Optional[str] = None,
+    similarity_threshold: Optional[float] = None,
     verbose: bool = True,
+    source_max_chars: Optional[int] = None,
 ):
+    embedding_model = setting_or_default(embedding_model, "embed_model")
+    similarity_threshold = setting_or_default(similarity_threshold, "topic_match_threshold")
     report = {
         "topics": [],
         "stats": {
@@ -32,7 +32,9 @@ def analyze_topic_coverage(
         },
     }
 
-    topics = extract_document_topics(segmenty, client=client, model=topic_model, verbose=verbose)
+    topics = extract_document_topics(
+        segmenty, client=client, model=topic_model, verbose=verbose, source_max_chars=source_max_chars
+    )
     report["topics"] = topics
     report["stats"]["topics_total"] = len(topics)
 
@@ -73,8 +75,15 @@ def analyze_topic_coverage(
     return report
 
 
-def extract_document_topics(segmenty, client=None, model: str = TOPIC_EXTRACTION_MODEL, verbose: bool = True):
-    source_text = build_topic_source_text(segmenty)
+def extract_document_topics(
+    segmenty,
+    client=None,
+    model: Optional[str] = None,
+    verbose: bool = True,
+    source_max_chars: Optional[int] = None,
+):
+    model = setting_or_default(model, "llm_model")
+    source_text = build_topic_source_text(segmenty, max_chars=source_max_chars)
     if not source_text.strip():
         return []
 
@@ -125,7 +134,8 @@ Materiál:
     return topics
 
 
-def build_topic_source_text(segmenty):
+def build_topic_source_text(segmenty, max_chars: Optional[int] = None):
+    max_chars = setting_or_default(max_chars, "topic_source_max_chars")
     parts: List[str] = []
     total_len = 0
     for seg in segmenty:
@@ -134,8 +144,8 @@ def build_topic_source_text(segmenty):
             continue
         page = seg.get("page")
         block = f"[{format_segment_label(seg)}]\n{text}" if page is not None else text
-        if total_len + len(block) > MAX_SOURCE_CHARS:
-            remaining = MAX_SOURCE_CHARS - total_len
+        if total_len + len(block) > max_chars:
+            remaining = max_chars - total_len
             if remaining > 0:
                 parts.append(block[:remaining])
             break

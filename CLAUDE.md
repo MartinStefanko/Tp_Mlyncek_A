@@ -21,6 +21,8 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Mimo `qgen/llm/` sa nesmie importovať žiadna knižnica výrobcu LLM.
 - Kľúče iba z prostredia (`.env`), nikdy v kóde ani v logoch. Logy neobsahujú text dokumentu.
 - Na konci každej úlohy: spusti testy, vypíš zhrnutie zmien (súbory, nové funkcie, otvorené body).
+- Testy spúšťaj cez venv/Scripts/python.exe -m pytest (globálny Python nemá závislosti).
+- Známy dlh: pipeline mení chybu LLM potichu na prázdny výsledok (generate_with_retry aj pipeline zachytávajú Exception). Oprava v kroku 6 – úloha musí skončiť failed s llm_error. Kým to nie je opravené, nové kódy toto správanie nesmú rozširovať.
 
 - Terminológia: LO z pôvodného kódu = tematický celok (v kóde Section). Learning object = jedna
   otázka alebo úloha vo výstupe (význam ECEH). Väčšie jednotky dokumentu pre split topics = témy (topic).

@@ -1,9 +1,11 @@
 from qgen.context_builder import parse_source_refs
 from qgen.llm.json_load import safe_load_json
+from qgen.config import setting_or_default
 from qgen.llm.client import generate_with_retry
 
 
-def infer_prerequisites(lo_list, model="gemini-2.5-flash-lite", client=None, verbose=True, document_language="sk"):
+def infer_prerequisites(lo_list, model=None, client=None, verbose=True, document_language="sk"):
+    model = setting_or_default(model, "llm_model_lo")
     if not lo_list:
         return lo_list
 
@@ -45,7 +47,8 @@ def infer_prerequisites(lo_list, model="gemini-2.5-flash-lite", client=None, ver
     return lo_list
 
 
-def infer_prerequisites_for_group(group, signature, model="gemini-2.5-flash-lite", client=None, verbose=True, document_language="sk"):
+def infer_prerequisites_for_group(group, signature, model=None, client=None, verbose=True, document_language="sk"):
+    model = setting_or_default(model, "llm_model_lo")
     summary_lines = []
     for obj in group:
         acts = obj.get("odporúčané_aktivity", [])

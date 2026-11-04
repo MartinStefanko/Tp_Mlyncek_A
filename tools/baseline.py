@@ -2,8 +2,10 @@
 
 Repeats exactly what the former app.py did on "Spustiť extrakciu textu":
     pdfs_to_text -> generate_lo_pipeline -> generate_all_items
-with the same models and parameters, but passes a RecordingClient through the
-existing `client` parameter so every LLM / embedding call is stored in JSONL.
+with the same models and parameters (OCR on, as app.py always did), but passes a
+RecordingClient through the existing `client` parameter so every LLM / embedding call
+is stored in JSONL. The pipeline returns its reports; this tool writes them (with the
+writers in qgen/cli.py).
 
 Usage (from the repo root):
     venv/Scripts/python.exe tools/baseline.py tests/fixtures/eko.pdf [more.pdf ...] [--out baseline]
@@ -13,7 +15,7 @@ Outputs in --out (default: baseline/):
     segments.json                      extracted pages (pipeline input after extraction)
     learning_objects.json / _all.json  final / all LO (same JSON export as the former app.py)
     questions.json / _all.json         final / all items (same JSON export as the former app.py)
-    reports/                           the pipeline's own reports (output_dir)
+    reports/                           the pipeline reports as text files
     metrics.json                       summary metrics taken from those reports
 """
 
@@ -31,11 +33,10 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import qgen.llm.client as llm_client  # noqa: E402
-import qgen.lo.pipeline as lo_pipeline  # noqa: E402
-import qgen.questions.pipeline as item_pipeline  # noqa: E402
+from qgen.cli import save_learning_objects_json, save_questions_json, write_reports  # noqa: E402
+from qgen.config import Settings  # noqa: E402
 from qgen.extraction.text_extraction import pdfs_to_text  # noqa: E402
 from qgen.lo.pipeline import generate_lo_pipeline  # noqa: E402
-from qgen.outputs import save_learning_objects_json, save_questions_json  # noqa: E402
 from qgen.questions.pipeline import generate_all_items  # noqa: E402
 from recording_client import RecordingClient  # noqa: E402
 
@@ -47,43 +48,6 @@ ITEM_EVALUATION_MODEL = "gemini-2.5-flash"
 ITEM_EVALUATION_BATCH_SIZE = 20
 LO_BATCH_SIZE = 10
 ITEM_BATCH_SIZE = 10
-
-# Report save functions whose input dicts we capture (module -> function names).
-CAPTURED_REPORTS = {
-    lo_pipeline: [
-        "save_topic_coverage_report",
-        "save_lo_relevance_to_segment_report",
-        "save_lo_faithfulness_report",
-        "save_lo_validation_report",
-    ],
-    item_pipeline: [
-        "save_item_validation_report",
-        "save_item_relevance_to_lo_report",
-        "save_item_faithfulness_report",
-        "save_item_answerability_report",
-    ],
-}
-
-
-def install_report_capture(captured: dict) -> list:
-    """Wrap the pipeline's report save functions so their report dicts are kept.
-
-    The original function is still called, so the pipeline writes its reports as usual.
-    Returns a list of (module, name, original) for restoring.
-    """
-    restore = []
-    for module, names in CAPTURED_REPORTS.items():
-        for name in names:
-            original = getattr(module, name)
-
-            def wrapper(report, output_dir, *args, _orig=original, _name=name, **kwargs):
-                captured[_name] = report
-                return _orig(report, output_dir, *args, **kwargs)
-
-            setattr(module, name, wrapper)
-            restore.append((module, name, original))
-    return restore
-
 
 class UnexpectedClientCreation(RuntimeError):
     pass
@@ -104,17 +68,17 @@ def install_client_guard() -> tuple:
     return genai_module, original
 
 
-def stats_of(captured: dict, name: str) -> dict:
-    return (captured.get(name) or {}).get("stats", {}) or {}
+def stats_of(reports: dict, name: str) -> dict:
+    return (reports.get(name) or {}).get("stats", {}) or {}
 
 
-def build_metrics(args, pdf_paths, captured, lo_report, item_report, los, items, timings, recorder):
-    coverage = stats_of(captured, "save_topic_coverage_report")
-    lo_faith = stats_of(captured, "save_lo_faithfulness_report")
-    lo_rel = stats_of(captured, "save_lo_relevance_to_segment_report")
-    item_faith = stats_of(captured, "save_item_faithfulness_report")
-    item_ans = stats_of(captured, "save_item_answerability_report")
-    item_rel = stats_of(captured, "save_item_relevance_to_lo_report")
+def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, timings, recorder):
+    coverage = stats_of(reports, "topic_coverage")
+    lo_faith = stats_of(reports, "lo_faithfulness")
+    lo_rel = stats_of(reports, "lo_relevance_to_segment")
+    item_faith = stats_of(reports, "item_faithfulness")
+    item_ans = stats_of(reports, "item_answerability")
+    item_rel = stats_of(reports, "item_relevance_to_lo")
     lo_details = (lo_report or {}).get("details", {})
     item_details = (item_report or {}).get("details", {})
 
@@ -207,8 +171,10 @@ def main(argv=None) -> int:
     real_client = llm_client.get_client()
     client = RecordingClient(real_client, out_dir / "llm_calls.jsonl")
 
-    captured: dict = {}
-    restore = install_report_capture(captured)
+    reports: dict = {}
+    lo_report, item_report = None, None
+    # Code defaults only (same values as the former app.py); .env must not change the baseline.
+    settings = Settings.model_construct()
     genai_module, original_client_cls = install_client_guard()
 
     timings: dict = {}
@@ -217,7 +183,7 @@ def main(argv=None) -> int:
         # 1) Extraction – same input shape as app.py ({"path", "name"}).
         pdf_inputs = [{"path": p, "name": os.path.basename(p)} for p in pdf_paths]
         t0 = time.perf_counter()
-        segments = pdfs_to_text(pdf_inputs)
+        segments = pdfs_to_text(pdf_inputs, ocr=True)
         timings["extraction"] = round(time.perf_counter() - t0, 4)
         timings["pages"] = len(segments)
         with open(out_dir / "segments.json", "w", encoding="utf-8") as f:
@@ -225,45 +191,48 @@ def main(argv=None) -> int:
 
         # 2) LO pipeline – same arguments as app.py, plus the recording client.
         t0 = time.perf_counter()
-        los, lo_report = generate_lo_pipeline(
+        lo_result = generate_lo_pipeline(
             segments,
             batch_size=LO_BATCH_SIZE,
             generation_model=LO_GENERATION_MODEL,
             prerequisites_model=LO_PREREQ_MODEL,
-            output_dir=str(reports_dir),
             client=client,
             verbose=True,
-            return_metrics=True,
+            settings=settings,
         )
         timings["lo_pipeline_wall"] = round(time.perf_counter() - t0, 4)
-        save_learning_objects_json(los, str(out_dir), all_los=lo_report.get("all_los"))
+        los = lo_result.learning_objects
+        lo_report = lo_result.reports["lo_processing_time"]
+        reports.update(lo_result.reports)
+        save_learning_objects_json(los, str(out_dir), all_los=lo_result.all_learning_objects)
 
         # 3) Item pipeline – app.py runs it only when some LO passed the filter.
-        items, item_report = [], None
+        items = []
         if los:
             t0 = time.perf_counter()
-            items, item_report = generate_all_items(
+            item_result = generate_all_items(
                 los,
                 segments,
                 batch_size=ITEM_BATCH_SIZE,
                 evaluation_batch_size=ITEM_EVALUATION_BATCH_SIZE,
                 generation_model=ITEM_GENERATION_MODEL,
                 evaluation_model=ITEM_EVALUATION_MODEL,
-                output_dir=str(reports_dir),
                 client=client,
                 verbose=True,
-                return_metrics=True,
+                settings=settings,
             )
             timings["item_pipeline_wall"] = round(time.perf_counter() - t0, 4)
-            save_questions_json(items, str(out_dir), all_items=item_report.get("all_items"))
+            items = item_result.questions
+            item_report = item_result.reports["item_processing_time"]
+            reports.update(item_result.reports)
+            save_questions_json(items, str(out_dir), all_items=item_result.all_questions)
+        write_reports(reports, reports_dir)
         timings["total_wall"] = round(time.perf_counter() - total_start, 4)
     finally:
         genai_module.Client = original_client_cls
-        for module, name, original in restore:
-            setattr(module, name, original)
         client.close()
 
-    metrics = build_metrics(args, pdf_paths, captured, lo_report, item_report, los, items, timings, client.recorder)
+    metrics = build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, timings, client.recorder)
     with open(out_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
 

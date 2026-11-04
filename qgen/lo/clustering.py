@@ -3,13 +3,12 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
+from qgen.config import setting_or_default
 from qgen.llm.client import embed_batch, ensure_client
 
-SIM_THRESHOLD = 0.82
+# Only for the debug print of the most similar pairs; no effect on the result.
 DEBUG_FLOOR = 0.5
 DEBUG_TOP = 30
-REQUIRE_SOURCE_OVERLAP = False
-EMBEDDING_MODEL = "gemini-embedding-001"
 
 
 def normalize_list_field(val) -> str:
@@ -35,12 +34,17 @@ def normalize_sources(val) -> set:
 
 def cluster_by_core(
     lo_list: List[Dict[str, Any]],
-    similarity_threshold: float = SIM_THRESHOLD,
+    similarity_threshold: Optional[float] = None,
     client: Optional[Any] = None,
-    embedding_model: str = EMBEDDING_MODEL,
+    embedding_model: Optional[str] = None,
+    require_source_overlap: Optional[bool] = None,
 ):
     if len(lo_list) < 2:
         return lo_list
+
+    similarity_threshold = setting_or_default(similarity_threshold, "cluster_sim_threshold")
+    embedding_model = setting_or_default(embedding_model, "embed_model")
+    require_source_overlap = setting_or_default(require_source_overlap, "cluster_require_source_overlap")
 
     client = ensure_client(client)
 
@@ -105,7 +109,7 @@ def cluster_by_core(
                 has_source_overlap = bool(sources_i & sources_j)
 
                 if sim >= similarity_threshold:
-                    if REQUIRE_SOURCE_OVERLAP and not has_source_overlap:
+                    if require_source_overlap and not has_source_overlap:
                         continue
                     cluster.append(j)
                     visited.add(j)

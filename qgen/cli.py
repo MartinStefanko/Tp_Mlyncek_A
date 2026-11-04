@@ -1,7 +1,27 @@
-"""Saving pipeline reports to output_dir (temporary, replaced by return values in step 5)."""
+"""Command line run of the pipeline; writes results and reports to a folder.
 
+    python -m qgen.cli <pdf...> --out <folder> [--ocr] [--language auto|sk|en]
+
+Output (today's format; the units format comes in step 14):
+    segments.json                      extracted pages
+    learning_objects.json / _all.json  accepted / all LO (tematické celky)
+    questions.json / _all.json         accepted / all questions (only when some LO passed)
+    reports/*.txt                      the pipeline reports in the former text format
+
+Progress goes to the console through progress_callback. This module and tools/ are the
+only places that write pipeline results to disk.
+"""
+
+import argparse
 import json
 import os
+import sys
+from pathlib import Path
+
+from qgen.config import Settings, get_settings
+from qgen.extraction.text_extraction import OcrUnavailableError, pdfs_to_text
+from qgen.llm.client import get_client
+from qgen.pipeline import PipelineResult, run_pipeline
 
 
 def write_json(path, data):
@@ -385,3 +405,110 @@ def save_questions_json(items, output_dir, all_items=None):
         write_json(all_items_json_path, all_items)
 
     return items_json_path
+
+
+# Report key (PipelineResult.reports) -> writer(report, reports_dir).
+REPORT_WRITERS = {
+    "lo_validation": save_lo_validation_report,
+    "document_topics": save_document_topics_txt,
+    "topic_coverage": save_topic_coverage_report,
+    "lo_relevance_to_segment": save_lo_relevance_to_segment_report,
+    "lo_faithfulness": save_lo_faithfulness_report,
+    "lo_processing_time": lambda report, d: save_processing_time_report(report, d, "lo_processing_time_report.txt"),
+    "item_validation": save_item_validation_report,
+    "item_relevance_to_lo": save_item_relevance_to_lo_report,
+    "item_faithfulness": save_item_faithfulness_report,
+    "item_answerability": save_item_answerability_report,
+    "item_processing_time": lambda report, d: save_processing_time_report(report, d, "item_processing_time_report.txt"),
+}
+
+
+def write_reports(reports, reports_dir):
+    """Write every known report of `reports` as a text file; returns the written paths."""
+    return [
+        REPORT_WRITERS[key](report, str(reports_dir))
+        for key, report in reports.items()
+        if key in REPORT_WRITERS
+    ]
+
+
+def write_results(result: PipelineResult, out_dir, segments=None):
+    """Write the pipeline result in today's format (see the module docstring)."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if segments is not None:
+        write_json(out_dir / "segments.json", segments)
+    save_learning_objects_json(result.learning_objects, str(out_dir), all_los=result.all_learning_objects)
+    if result.question_result is not None:
+        save_questions_json(result.questions, str(out_dir), all_items=result.all_questions)
+    write_reports(result.reports, out_dir / "reports")
+
+
+def print_progress(stage, done, total):
+    percent = f"{100 * done / total:5.1f} %" if total else "  -   "
+    print(f"[{stage:<16}] {done:>4}/{total:<4} {percent}", flush=True)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="python -m qgen.cli",
+        description="Extract text, generate LO (tematické celky) and questions, write results to a folder.",
+    )
+    parser.add_argument("pdfs", nargs="+", help="Input PDF file(s).")
+    parser.add_argument("--out", required=True, help="Output folder.")
+    parser.add_argument(
+        "--ocr",
+        action="store_true",
+        default=None,
+        help="OCR of images in the PDF (needs easyocr). Default: QGEN_OCR_ENABLED.",
+    )
+    parser.add_argument(
+        "--language",
+        choices=("auto", "sk", "en"),
+        default="auto",
+        help="Document language; auto = detect (default).",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Also print the pipeline's own log lines.")
+    return parser
+
+
+def main(argv=None, client=None, settings: Settings = None) -> int:
+    """`client` and `settings` are for tests (replay client, fixed settings)."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    settings = settings or get_settings()
+
+    pdf_paths = [str(Path(p).resolve()) for p in args.pdfs]
+    for p in pdf_paths:
+        if not Path(p).is_file():
+            parser.error(f"File not found: {p}")
+
+    if client is None:
+        client = get_client()
+
+    pdf_inputs = [{"path": p, "name": os.path.basename(p)} for p in pdf_paths]
+    try:
+        segments = pdfs_to_text(pdf_inputs, ocr=args.ocr, progress_callback=print_progress, settings=settings)
+    except OcrUnavailableError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+
+    result = run_pipeline(
+        segments,
+        client=client,
+        language=args.language,
+        progress_callback=print_progress,
+        settings=settings,
+        verbose=args.verbose,
+    )
+    write_results(result, args.out, segments=segments)
+
+    print(
+        f"Done: {len(segments)} pages, {len(result.learning_objects)} LO, "
+        f"{len(result.questions)} questions. Saved to: {Path(args.out).resolve()}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

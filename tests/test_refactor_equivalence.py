@@ -1,5 +1,8 @@
 """Step 4: moving Hlavna_cast/ into qgen/ must not change the pipeline results.
 
+Step 5 changed only how the results are returned (result dataclasses instead of files in
+output_dir) and where the settings come from; the expected values stay the same.
+
 Runs the LO pipeline and the question pipeline on baseline/segments.json (no PDF, no OCR)
 with the replay client and compares the results with the baseline outputs. The only
 allowed differences are listed in tests/recording_transforms.py.
@@ -12,8 +15,9 @@ from pathlib import Path
 
 import pytest
 
+from qgen.cli import normalize_lo_for_export
+from qgen.config import Settings
 from qgen.lo.pipeline import generate_lo_pipeline
-from qgen.outputs import normalize_lo_for_export
 from qgen.questions.pipeline import generate_all_items
 from tests.recording_transforms import REMOVED_CALL_MARKERS, REMOVED_ITEM_FIELDS, step4_transforms
 from tests.replay_client import ReplayClient
@@ -45,7 +49,7 @@ def _without_removed_fields(items):
 
 
 @pytest.fixture(scope="module")
-def replay_run(tmp_path_factory):
+def replay_run():
     missing = [name for name in REQUIRED_FILES if not (BASELINE_DIR / name).is_file()]
     if missing:
         pytest.skip(f"Baseline recording is missing locally: {', '.join(missing)}")
@@ -53,57 +57,57 @@ def replay_run(tmp_path_factory):
     models = _load_json("metrics.json")["models"]
     segments = _load_json("segments.json")
     client = ReplayClient(BASELINE_DIR / "llm_calls.jsonl", transforms=step4_transforms())
-    reports_dir = tmp_path_factory.mktemp("reports")
+    # Code defaults only; a local .env or QGEN_* variables must not change the baseline run.
+    settings = Settings.model_construct()
 
-    los, lo_report = generate_lo_pipeline(
+    lo_result = generate_lo_pipeline(
         segments,
         batch_size=models["lo_batch_size"],
         generation_model=models["lo_generation"],
         prerequisites_model=models["lo_prerequisites"],
-        output_dir=str(reports_dir),
         client=client,
         verbose=False,
-        return_metrics=True,
+        settings=settings,
     )
-    items, item_report = [], {"all_items": []}
-    if los:
-        items, item_report = generate_all_items(
-            los,
+    items, all_items = [], []
+    if lo_result.learning_objects:
+        item_result = generate_all_items(
+            lo_result.learning_objects,
             segments,
             batch_size=models["item_batch_size"],
             evaluation_batch_size=models["item_evaluation_batch_size"],
             generation_model=models["item_generation"],
             evaluation_model=models["item_evaluation"],
-            output_dir=str(reports_dir),
             client=client,
             verbose=False,
-            return_metrics=True,
+            settings=settings,
         )
+        items, all_items = item_result.questions, item_result.all_questions
     return {
         "client": client,
-        "los": los,
-        "lo_report": lo_report,
+        "los": lo_result.learning_objects,
+        "all_los": lo_result.all_learning_objects,
         "items": items,
-        "item_report": item_report,
+        "all_items": all_items,
     }
 
 
 def test_learning_objects_match_baseline(replay_run):
     accepted = _as_json([normalize_lo_for_export(lo) for lo in replay_run["los"]])
-    all_los = _as_json([normalize_lo_for_export(lo) for lo in replay_run["lo_report"]["all_los"]])
+    all_los = _as_json([normalize_lo_for_export(lo) for lo in replay_run["all_los"]])
     assert accepted == _load_json("learning_objects.json")
     assert all_los == _load_json("learning_objects_all.json")
 
 
 def test_questions_match_baseline(replay_run):
     assert _as_json(replay_run["items"]) == _without_removed_fields(_load_json("questions.json"))
-    assert _as_json(replay_run["item_report"]["all_items"]) == _without_removed_fields(
+    assert _as_json(replay_run["all_items"]) == _without_removed_fields(
         _load_json("questions_all.json")
     )
 
 
 def test_questions_have_no_removed_fields(replay_run):
-    for item in replay_run["items"] + replay_run["item_report"]["all_items"]:
+    for item in replay_run["items"] + replay_run["all_items"]:
         assert not set(REMOVED_ITEM_FIELDS) & set(item), item.get("id")
 
 

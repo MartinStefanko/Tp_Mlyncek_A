@@ -285,3 +285,20 @@ Príklad: `"external_ref": "mock-fail-gen-42"`.
 - Počet strán ani heslo PDF sa nekontrolujú. `extraction.ocr = true` sa vždy prijme.
 - Výsledky sa nemažú po 7 dňoch. PDF sa neukladá.
 - Webhooky posiela API proces, nie worker. Opakovania sa pri reštarte stratia.
+
+## Pipeline z príkazového riadka (CLI)
+
+CLI spustí extrakciu, tematické celky a otázky. Výsledky a reporty zapíše do priečinka.
+Formát výstupu je zatiaľ pôvodný (`learning_objects.json`, `questions.json`, `reports/*.txt`).
+
+```bash
+venv/Scripts/python.exe -m qgen.cli eko.pdf --out vystup
+venv/Scripts/python.exe -m qgen.cli a.pdf b.pdf --out vystup --ocr --language sk
+```
+
+- `--ocr` zapne OCR obrázkov. Potrebuje knižnicu `easyocr`. Predvolená hodnota je `QGEN_OCR_ENABLED` (false).
+- `--language auto|sk|en` určí jazyk dokumentu. Pri `auto` (predvolené) jazyk zistí LLM.
+- `--verbose` vypíše aj vlastné hlásenia pipeline.
+
+Všetky nastavenia (modely, prahy, veľkosti batchov, limity) sú v `qgen/config.py`
+a v `.env.example`. Predvolené modely sú tie, s ktorými vznikol baseline.

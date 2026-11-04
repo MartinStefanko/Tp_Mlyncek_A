@@ -1,19 +1,21 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
+from qgen.config import setting_or_default
 from qgen.llm.client import embed_batch, ensure_client
-from qgen.lo.clustering import EMBEDDING_MODEL, normalize_list_field
+from qgen.lo.clustering import normalize_list_field
 
 
 def analyze_item_relevance_to_lo(
     items,
     los,
     client=None,
-    embedding_model: str = EMBEDDING_MODEL,
+    embedding_model: Optional[str] = None,
     verbose: bool = True,
 ):
+    embedding_model = setting_or_default(embedding_model, "embed_model")
     report = {
         "stats": {
             "items_total": len(items),

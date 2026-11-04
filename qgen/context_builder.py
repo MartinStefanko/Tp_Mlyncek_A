@@ -1,5 +1,7 @@
 import re
 
+from qgen.config import setting_or_default
+
 
 SOURCE_REF_RE = re.compile(r"\b([A-Za-z]\w*)\s*[:#-]\s*(\d+)\b")
 
@@ -165,7 +167,8 @@ def resolve_source_names(citovane_zdroje, source_name_map):
     return names
 
 
-def build_context_for_sources(citovane_zdroje, page_map, max_chars=8000):
+def build_context_for_sources(citovane_zdroje, page_map, max_chars=None):
+    max_chars = setting_or_default(max_chars, "context_max_chars")
     refs = parse_source_refs(citovane_zdroje)
     if not refs:
         return ""
@@ -192,7 +195,7 @@ def build_context_for_sources(citovane_zdroje, page_map, max_chars=8000):
     return "\n\n".join(texts)
 
 
-def build_context_for_lo(lo, page_map, max_chars=8000):
+def build_context_for_lo(lo, page_map, max_chars=None):
     return build_context_for_sources(lo.get("citovane_zdroje", []), page_map, max_chars=max_chars)
 
 

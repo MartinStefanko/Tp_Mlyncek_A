@@ -1,20 +1,23 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 from qgen.context_builder import build_context_for_lo, build_page_map
+from qgen.config import setting_or_default
 from qgen.llm.client import embed_batch, ensure_client
-from qgen.lo.clustering import EMBEDDING_MODEL, normalize_list_field
+from qgen.lo.clustering import normalize_list_field
 
 
 def analyze_lo_relevance_to_segment(
     segmenty,
     los,
     client=None,
-    embedding_model: str = EMBEDDING_MODEL,
+    embedding_model: Optional[str] = None,
     verbose: bool = True,
+    context_max_chars: Optional[int] = None,
 ):
+    embedding_model = setting_or_default(embedding_model, "embed_model")
     report = {
         "stats": {
             "los_total": len(los),
@@ -32,7 +35,7 @@ def analyze_lo_relevance_to_segment(
 
     for lo in los:
         lo_text = lo_to_text(lo)
-        source_text = build_context_for_lo(lo, page_map, max_chars=8000)
+        source_text = build_context_for_lo(lo, page_map, max_chars=context_max_chars)
 
         item = {
             "lo_id": lo.get("id"),

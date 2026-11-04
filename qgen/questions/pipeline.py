@@ -1,6 +1,9 @@
 import time
 import re
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
+from qgen.config import Settings, get_settings, setting_or_default
 from qgen.context_builder import (
     build_allowed_source_refs,
     build_page_map,
@@ -9,38 +12,54 @@ from qgen.context_builder import (
     parse_source_refs,
     resolve_source_names,
 )
-from qgen.extraction.document_language import detect_document_language
+from qgen.extraction.document_language import resolve_document_language
 from qgen.questions.answerability import analyze_item_answerability
 from qgen.questions.faithfulness import analyze_item_faithfulness
 from qgen.questions.relevance_to_lo import analyze_item_relevance_to_lo
 from qgen.questions.validation import validate_items
 from qgen.llm.json_load import safe_load_json
 from qgen.llm.client import generate_with_retry
-from qgen.outputs import (
-    save_item_faithfulness_report,
-    save_item_answerability_report,
-    save_item_relevance_to_lo_report,
-    save_processing_time_report,
-    save_item_validation_report,
+from qgen.progress import (
+    STAGE_Q_EVALUATION,
+    STAGE_QUESTIONS,
+    ProgressCallback,
+    SubProgress,
+    batch_count,
+    report_progress,
 )
 
-ITEM_MIN_SCORE = 3
-ITEM_MIN_ANSWERABILITY_SCORE = 3
-ITEM_MIN_FAITHFULNESS_SCORE = 3
+
+@dataclass
+class QuestionPipelineResult:
+    """Result of generate_all_items. Nothing is written to disk.
+
+    questions      accepted questions with ids 1..n
+    all_questions  all questions before filtering
+    language_info  {"language": "sk"|"en", "reason": str}
+    reports        report dicts, keys: item_validation, item_relevance_to_lo,
+                   item_faithfulness, item_answerability, item_processing_time
+    """
+
+    questions: list[dict]
+    all_questions: list[dict]
+    language_info: dict[str, str]
+    reports: dict[str, Any] = field(default_factory=dict)
 
 
 def generate_items_for_batch(
     los_batch,
     page_map,
     document_language="sk",
-    model="gemini-2.5-flash-lite",
+    model=None,
     client=None,
-    verbose=True
+    verbose=True,
+    context_max_chars=None,
 ):
+    model = setting_or_default(model, "llm_model_questions")
     lo_blocks = []
     for lo in los_batch:
         lo_id = lo.get("id")
-        context = build_context_for_lo(lo, page_map)
+        context = build_context_for_lo(lo, page_map, max_chars=context_max_chars)
         if not context.strip():
             if verbose:
                 print(f"  LO {lo_id}: bez kontextu, preskakujem v tomto batche.")
@@ -95,9 +114,10 @@ def generate_items_for_batch(
     return items
 
 
-def evaluate_items_batch(items_batch, model="gemini-2.5-flash-lite", client=None, verbose=True, document_language="sk"):
+def evaluate_items_batch(items_batch, model=None, client=None, verbose=True, document_language="sk"):
     if not items_batch:
         return {}
+    model = setting_or_default(model, "llm_model_eval")
 
     parts = []
     for item in items_batch:
@@ -161,36 +181,52 @@ def attach_source_names(items, source_name_map):
 def generate_all_items(
     los,
     segmenty,
-    batch_size=10,
-    evaluation_batch_size=20,
-    model="gemini-2.5-flash-lite",
+    batch_size=None,
+    evaluation_batch_size=None,
+    model=None,
     generation_model=None,
     evaluation_model=None,
-    output_dir=None,
     client=None,
     verbose=True,
-    max_batch_attempts=3,
-    max_eval_attempts=2,
-    return_metrics=False,
-):
-    generation_model = generation_model or model
-    evaluation_model = evaluation_model or model
+    max_batch_attempts=None,
+    max_eval_attempts=None,
+    document_language=None,
+    progress_callback: Optional[ProgressCallback] = None,
+    settings: Optional[Settings] = None,
+) -> QuestionPipelineResult:
+    """Question pipeline: language, generation and scoring per LO batch, evaluation, filter.
+
+    document_language: None or "auto" = detect with the LLM; "sk" / "en" = use it.
+    Values not given come from `settings` (default: get_settings()).
+    """
+    settings = settings or get_settings()
+    batch_size = batch_size or settings.question_batch_size
+    evaluation_batch_size = evaluation_batch_size or settings.question_eval_batch_size
+    max_batch_attempts = max_batch_attempts or settings.question_generation_attempts
+    max_eval_attempts = max_eval_attempts or settings.question_eval_attempts
+    generation_model = generation_model or model or settings.llm_model_questions
+    evaluation_model = evaluation_model or model or settings.llm_model_eval
 
     page_map = build_page_map(segmenty)
     source_name_map = build_source_name_map(segmenty)
     if verbose:
         print("Item pipeline: detekujem jazyk dokumentu.")
-    language_info = detect_document_language(
+    language_info = resolve_document_language(
         segmenty,
+        document_language,
         client=client,
         model=generation_model,
+        settings=settings,
         verbose=verbose,
+        progress_callback=progress_callback,
     )
     document_language = language_info.get("language", "sk")
     lo_order = {lo.get("id"): idx for idx, lo in enumerate(los)}
     all_items = []
     next_item_id = 1
     total_los = len(los)
+    total_batches = batch_count(total_los, batch_size)
+    report_progress(progress_callback, STAGE_QUESTIONS, 0, total_batches)
 
     if verbose:
         print(f"Začínam generovanie položiek pre {total_los} LO v batchoch po {batch_size}.")
@@ -214,7 +250,8 @@ def generate_all_items(
                 document_language=document_language,
                 model=generation_model,
                 client=client,
-                verbose=verbose
+                verbose=verbose,
+                context_max_chars=settings.context_max_chars,
             )
             if raw_items:
                 break
@@ -281,12 +318,16 @@ def generate_all_items(
                 f"Generovanie: {batch_generation_seconds:.2f} s, "
                 f"evaluacia: {batch_evaluation_seconds:.2f} s"
             )
+        report_progress(progress_callback, STAGE_QUESTIONS, batch_num, total_batches)
         batch_num += 1
     all_items.sort(key=lambda item: item_sort_key(item, lo_order))
     for i, item in enumerate(all_items, start=1):
         item["id"] = i
     attach_source_names(all_items, source_name_map)
 
+    # Step q_evaluation: relevance (1 unit), faithfulness batches, answerability batches.
+    expected_check_batches = batch_count(len(all_items), evaluation_batch_size)
+    report_progress(progress_callback, STAGE_Q_EVALUATION, 0, 1 + 2 * expected_check_batches)
     evaluation_start_reports = time.perf_counter()
     if verbose:
         print("Item pipeline: spustam validaciu a evaluacne reporty poloziek.")
@@ -301,38 +342,51 @@ def generate_all_items(
         all_items,
         los,
         client=client,
+        embedding_model=settings.embed_model,
         verbose=verbose,
     )
+    report_progress(progress_callback, STAGE_Q_EVALUATION, 1, 1 + 2 * expected_check_batches)
+    faithfulness_progress = SubProgress(progress_callback, before=1, after=expected_check_batches)
     item_faithfulness_report = analyze_item_faithfulness(
         segmenty,
         all_items,
         client=client,
+        model=settings.llm_model,
         verbose=verbose,
         batch_size=evaluation_batch_size,
+        max_batch_attempts=settings.check_batch_attempts,
         document_language=document_language,
+        context_max_chars=settings.context_max_chars,
+        faithful_score=settings.question_faithful_score,
+        progress_callback=faithfulness_progress,
     )
+    answerability_progress = SubProgress(progress_callback, before=1 + faithfulness_progress.sub_total)
     item_answerability_report = analyze_item_answerability(
         segmenty,
         all_items,
         client=client,
+        model=settings.llm_model,
         verbose=verbose,
         batch_size=evaluation_batch_size,
+        max_batch_attempts=settings.check_batch_attempts,
         document_language=document_language,
+        context_max_chars=settings.context_max_chars,
+        answerable_score=settings.question_answerable_score,
+        progress_callback=answerability_progress,
     )
+    q_evaluation_done = 1 + faithfulness_progress.sub_total + answerability_progress.sub_total
+    report_progress(progress_callback, STAGE_Q_EVALUATION, q_evaluation_done, q_evaluation_done)
     accepted_items = filter_items_variant_b(
         all_items,
         item_validation_report,
         item_faithfulness_report,
         item_answerability_report,
+        min_score=settings.question_min_score,
+        min_faithfulness_score=settings.question_min_faithfulness_score,
+        min_answerability_score=settings.question_min_answerability_score,
     )
     normalized_items = normalize_accepted_items(accepted_items, valid_lo_ids)
     attach_source_names(normalized_items, source_name_map)
-
-    if output_dir:
-        save_item_validation_report(item_validation_report, output_dir)
-        save_item_relevance_to_lo_report(item_relevance_report, output_dir)
-        save_item_faithfulness_report(item_faithfulness_report, output_dir)
-        save_item_answerability_report(item_answerability_report, output_dir)
     evaluation_seconds += time.perf_counter() - evaluation_start_reports
 
     timing_report = {
@@ -348,18 +402,23 @@ def generate_all_items(
             "document_language_reason": language_info.get("reason", ""),
         },
     }
-    if output_dir:
-        save_processing_time_report(timing_report, output_dir, "item_processing_time_report.txt")
 
     if verbose:
         print(f"\nGenerovanie položiek pre všetky LO dokončené. Celkový počet položiek: {len(all_items)}")
         print(f"Cas generovania položiek: {generation_seconds:.2f} s")
         print(f"Cas evaluacie položiek: {evaluation_seconds:.2f} s")
-    if return_metrics:
-        timing_report["language_info"] = language_info
-        timing_report["all_items"] = all_items
-        return normalized_items, timing_report
-    return normalized_items
+    return QuestionPipelineResult(
+        questions=normalized_items,
+        all_questions=all_items,
+        language_info=language_info,
+        reports={
+            "item_validation": item_validation_report,
+            "item_relevance_to_lo": item_relevance_report,
+            "item_faithfulness": item_faithfulness_report,
+            "item_answerability": item_answerability_report,
+            "item_processing_time": timing_report,
+        },
+    )
 
 
 def build_item_generation_prompt(los_text, document_language):
@@ -587,7 +646,13 @@ def filter_items_variant_b(
     validation_report,
     faithfulness_report,
     answerability_report,
+    min_score=None,
+    min_faithfulness_score=None,
+    min_answerability_score=None,
 ):
+    min_score = setting_or_default(min_score, "question_min_score")
+    min_faithfulness_score = setting_or_default(min_faithfulness_score, "question_min_faithfulness_score")
+    min_answerability_score = setting_or_default(min_answerability_score, "question_min_answerability_score")
     invalid_item_ids = extract_prefixed_ids(validation_report.get("errors", []), "Polozka")
     faithfulness_by_id = {
         row.get("item_id"): row.get("faithfulness_score")
@@ -607,13 +672,13 @@ def filter_items_variant_b(
             continue
 
         faithfulness_score = faithfulness_by_id.get(item_id)
-        if faithfulness_score is None or faithfulness_score < ITEM_MIN_FAITHFULNESS_SCORE:
+        if faithfulness_score is None or faithfulness_score < min_faithfulness_score:
             continue
 
         score = get_item_score(item)
         answerability_score = answerability_by_id.get(item_id)
-        score_ok = score is not None and score >= ITEM_MIN_SCORE
-        answerability_ok = answerability_score is not None and answerability_score >= ITEM_MIN_ANSWERABILITY_SCORE
+        score_ok = score is not None and score >= min_score
+        answerability_ok = answerability_score is not None and answerability_score >= min_answerability_score
         if not (score_ok or answerability_ok):
             continue
 

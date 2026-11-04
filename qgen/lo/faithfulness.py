@@ -1,21 +1,25 @@
 from qgen.context_builder import build_context_for_lo, build_page_map
 from qgen.llm.json_load import safe_load_json
+from qgen.config import setting_or_default
 from qgen.llm.client import generate_with_retry
-
-
-FAITHFULNESS_MODEL = "gemini-2.5-flash-lite"
+from qgen.progress import STAGE_LO_EVALUATION, batch_count, report_progress
 
 
 def analyze_lo_faithfulness(
     segmenty,
     los,
     client=None,
-    model: str = FAITHFULNESS_MODEL,
+    model=None,
     verbose: bool = True,
-    batch_size: int = 20,
-    max_batch_attempts: int = 2,
+    batch_size=None,
+    max_batch_attempts=None,
     document_language: str = "sk",
+    context_max_chars=None,
+    progress_callback=None,
 ):
+    model = setting_or_default(model, "llm_model")
+    batch_size = setting_or_default(batch_size, "lo_batch_size")
+    max_batch_attempts = setting_or_default(max_batch_attempts, "check_batch_attempts")
     report = {
         "stats": {
             "los_total": len(los),
@@ -42,7 +46,7 @@ def analyze_lo_faithfulness(
         }
         report["items"].append(item)
 
-        source_text = build_context_for_lo(lo, page_map, max_chars=8000)
+        source_text = build_context_for_lo(lo, page_map, max_chars=context_max_chars)
         if not source_text.strip():
             continue
 
@@ -53,6 +57,8 @@ def analyze_lo_faithfulness(
             "source_text": source_text,
         })
 
+    total_batches = batch_count(len(comparable_items), batch_size)
+    report_progress(progress_callback, STAGE_LO_EVALUATION, 0, total_batches)
     for start in range(0, len(comparable_items), batch_size):
         batch = comparable_items[start:start + batch_size]
         evaluations = {}
@@ -78,6 +84,7 @@ def analyze_lo_faithfulness(
             row["reason"] = evaluation.get("zdovodnenie", "")
             if isinstance(row["faithfulness_score"], int):
                 scores.append(row["faithfulness_score"])
+        report_progress(progress_callback, STAGE_LO_EVALUATION, start // batch_size + 1, total_batches)
 
     report["stats"]["los_evaluated"] = len(scores)
     if scores:
@@ -85,7 +92,7 @@ def analyze_lo_faithfulness(
     return report
 
 
-def evaluate_lo_faithfulness_batch(batch, client=None, model: str = FAITHFULNESS_MODEL, verbose: bool = True, document_language: str = "sk"):
+def evaluate_lo_faithfulness_batch(batch, client=None, model=None, verbose: bool = True, document_language: str = "sk"):
     parts = []
     for item in batch:
         parts.append(

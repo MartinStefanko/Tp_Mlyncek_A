@@ -1,20 +1,20 @@
-import os
 import time
 from typing import Any, List, Optional
 
 from google import genai
-from dotenv import load_dotenv
+
+from qgen.config import get_settings, setting_or_default
 
 
 def get_client(api_key=None):
-    load_dotenv()
-    key = api_key or os.getenv("GEMINI_API_KEY")
+    key = api_key or get_settings().gemini_api_key.get_secret_value()
     if not key:
         raise ValueError("GEMINI_API_KEY is not set.")
     return genai.Client(api_key=key)
 
 
-def generate_with_retry(prompt, client=None, model="gemini-2.5-flash-lite", retries=5, delay=3.0, verbose=True):
+def generate_with_retry(prompt, client=None, model=None, retries=5, delay=3.0, verbose=True):
+    model = setting_or_default(model, "llm_model")
     if client is None:
         client = get_client()
 
@@ -35,7 +35,7 @@ def generate_with_retry(prompt, client=None, model="gemini-2.5-flash-lite", retr
 def ensure_client(client: Optional[Any] = None) -> Any:
     if client is not None:
         return client
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = get_settings().gemini_api_key.get_secret_value()
     if not api_key:
         raise RuntimeError("Chýba GEMINI_API_KEY.")
     return genai.Client(api_key=api_key)

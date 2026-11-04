@@ -1,21 +1,27 @@
 from qgen.context_builder import build_context_for_sources, build_page_map
 from qgen.llm.json_load import safe_load_json
+from qgen.config import setting_or_default
 from qgen.llm.client import generate_with_retry
-
-
-ANSWERABILITY_MODEL = "gemini-2.5-flash-lite"
+from qgen.progress import STAGE_Q_EVALUATION, batch_count, report_progress
 
 
 def analyze_item_answerability(
     segmenty,
     items,
     client=None,
-    model: str = ANSWERABILITY_MODEL,
+    model=None,
     verbose: bool = True,
-    batch_size: int = 10,
-    max_batch_attempts: int = 2,
+    batch_size=None,
+    max_batch_attempts=None,
     document_language: str = "sk",
+    context_max_chars=None,
+    answerable_score=None,
+    progress_callback=None,
 ):
+    model = setting_or_default(model, "llm_model")
+    batch_size = setting_or_default(batch_size, "question_eval_batch_size")
+    max_batch_attempts = setting_or_default(max_batch_attempts, "check_batch_attempts")
+    answerable_score = setting_or_default(answerable_score, "question_answerable_score")
     report = {
         "stats": {
             "items_total": len(items),
@@ -46,7 +52,7 @@ def analyze_item_answerability(
         }
         report["items"].append(row)
 
-        source_text = build_context_for_item(item, page_map)
+        source_text = build_context_for_item(item, page_map, max_chars=context_max_chars)
         if not source_text.strip():
             continue
 
@@ -57,6 +63,8 @@ def analyze_item_answerability(
             "source_text": source_text,
         })
 
+    total_batches = batch_count(len(comparable_items), batch_size)
+    report_progress(progress_callback, STAGE_Q_EVALUATION, 0, total_batches)
     for start in range(0, len(comparable_items), batch_size):
         batch = comparable_items[start:start + batch_size]
         evaluations = {}
@@ -84,9 +92,10 @@ def analyze_item_answerability(
             row["reason"] = evaluation.get("zdovodnenie", "")
             if isinstance(row["answerability_score"], int):
                 scores.append(row["answerability_score"])
-                row["answerable"] = row["answerability_score"] >= 4
+                row["answerable"] = row["answerability_score"] >= answerable_score
                 if row["answerable"]:
                     answerable_items += 1
+        report_progress(progress_callback, STAGE_Q_EVALUATION, start // batch_size + 1, total_batches)
 
     report["stats"]["items_evaluated"] = len(scores)
     if scores:
@@ -96,7 +105,7 @@ def analyze_item_answerability(
     return report
 
 
-def evaluate_item_answerability_batch(batch, client=None, model: str = ANSWERABILITY_MODEL, verbose: bool = True, document_language: str = "sk"):
+def evaluate_item_answerability_batch(batch, client=None, model=None, verbose: bool = True, document_language: str = "sk"):
     parts = []
     for item in batch:
         parts.append(
@@ -170,5 +179,5 @@ def question_to_text(item):
     return f"otazka: {item.get('otazka', '')}"
 
 
-def build_context_for_item(item, page_map, max_chars=8000):
+def build_context_for_item(item, page_map, max_chars=None):
     return build_context_for_sources(item.get("citovane_zdroje", []), page_map, max_chars=max_chars)
