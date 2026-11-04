@@ -1,6 +1,6 @@
-"""Baseline run of the current pipeline in Hlavna_cast/ without Streamlit.
+"""Baseline run of the pipeline in qgen/ (originally Hlavna_cast/, run without Streamlit).
 
-Repeats exactly what app.py does on "Spustiť extrakciu textu":
+Repeats exactly what the former app.py did on "Spustiť extrakciu textu":
     pdfs_to_text -> generate_lo_pipeline -> generate_all_items
 with the same models and parameters, but passes a RecordingClient through the
 existing `client` parameter so every LLM / embedding call is stored in JSONL.
@@ -11,8 +11,8 @@ Usage (from the repo root):
 Outputs in --out (default: baseline/):
     llm_calls.jsonl                    recording of all LLM and embedding calls
     segments.json                      extracted pages (pipeline input after extraction)
-    learning_objects.json / _all.json  final / all LO (same export as app.py)
-    questions.json / _all.json         final / all items (same export as app.py)
+    learning_objects.json / _all.json  final / all LO (same JSON export as the former app.py)
+    questions.json / _all.json         final / all items (same JSON export as the former app.py)
     reports/                           the pipeline's own reports (output_dir)
     metrics.json                       summary metrics taken from those reports
 """
@@ -27,20 +27,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PIPELINE_DIR = REPO_ROOT / "Hlavna_cast"
-sys.path.insert(0, str(PIPELINE_DIR))
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import item_pipeline  # noqa: E402
-import llm_client  # noqa: E402
-import lo_pipeline  # noqa: E402
-from item_pipeline import generate_all_items  # noqa: E402
-from lo_pipeline import generate_lo_pipeline  # noqa: E402
-from outputs import save_learning_objects_json_txt, save_questions_json_txt  # noqa: E402
+import qgen.llm.client as llm_client  # noqa: E402
+import qgen.lo.pipeline as lo_pipeline  # noqa: E402
+import qgen.questions.pipeline as item_pipeline  # noqa: E402
+from qgen.extraction.text_extraction import pdfs_to_text  # noqa: E402
+from qgen.lo.pipeline import generate_lo_pipeline  # noqa: E402
+from qgen.outputs import save_learning_objects_json, save_questions_json  # noqa: E402
+from qgen.questions.pipeline import generate_all_items  # noqa: E402
 from recording_client import RecordingClient  # noqa: E402
-from text_extraction import pdfs_to_text  # noqa: E402
 
-# Same values as Hlavna_cast/app.py
+# Same values as the former Hlavna_cast/app.py
 LO_GENERATION_MODEL = "gemini-2.5-flash-lite"
 LO_PREREQ_MODEL = "gemini-2.5-flash-lite"
 ITEM_GENERATION_MODEL = "gemini-2.5-flash-lite"
@@ -62,9 +61,6 @@ CAPTURED_REPORTS = {
         "save_item_relevance_to_lo_report",
         "save_item_faithfulness_report",
         "save_item_answerability_report",
-        "save_python_code_syntax_report",
-        "save_python_code_runtime_report",
-        "save_python_code_correctness_report",
     ],
 }
 
@@ -142,7 +138,6 @@ def build_metrics(args, pdf_paths, captured, lo_report, item_report, los, items,
             "item_batch_size": ITEM_BATCH_SIZE,
         },
         "document_language": lo_details.get("document_language"),
-        "is_python_document": item_details.get("is_python_document"),
         "topic_coverage": {
             "coverage_percent": coverage.get("coverage_percent"),
             "topics_total": coverage.get("topics_total"),
@@ -241,7 +236,7 @@ def main(argv=None) -> int:
             return_metrics=True,
         )
         timings["lo_pipeline_wall"] = round(time.perf_counter() - t0, 4)
-        save_learning_objects_json_txt(los, str(out_dir), all_los=lo_report.get("all_los"))
+        save_learning_objects_json(los, str(out_dir), all_los=lo_report.get("all_los"))
 
         # 3) Item pipeline – app.py runs it only when some LO passed the filter.
         items, item_report = [], None
@@ -260,7 +255,7 @@ def main(argv=None) -> int:
                 return_metrics=True,
             )
             timings["item_pipeline_wall"] = round(time.perf_counter() - t0, 4)
-            save_questions_json_txt(items, str(out_dir), all_items=item_report.get("all_items"))
+            save_questions_json(items, str(out_dir), all_items=item_report.get("all_items"))
         timings["total_wall"] = round(time.perf_counter() - total_start, 4)
     finally:
         genai_module.Client = original_client_cls

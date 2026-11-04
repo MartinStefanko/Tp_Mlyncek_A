@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-from json_load import safe_load_json
-from context_builder import format_segment_label
-from llm_client import generate_with_retry
-from lo_clustering import EMBEDDING_MODEL, embed_batch, ensure_client, normalize_list_field
+from qgen.llm.json_load import safe_load_json
+from qgen.context_builder import format_segment_label
+from qgen.llm.client import embed_batch, ensure_client, generate_with_retry
+from qgen.lo.clustering import EMBEDDING_MODEL, normalize_list_field
 
 TOPIC_EXTRACTION_MODEL = "gemini-2.5-flash-lite"
 TOPIC_MATCH_THRESHOLD = 0.72

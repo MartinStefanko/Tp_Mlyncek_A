@@ -1,24 +1,15 @@
-import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from google import genai
 from sklearn.metrics.pairwise import cosine_similarity
+
+from qgen.llm.client import embed_batch, ensure_client
 
 SIM_THRESHOLD = 0.82
 DEBUG_FLOOR = 0.5
 DEBUG_TOP = 30
 REQUIRE_SOURCE_OVERLAP = False
 EMBEDDING_MODEL = "gemini-embedding-001"
-
-
-def ensure_client(client: Optional[genai.Client] = None) -> genai.Client:
-    if client is not None:
-        return client
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("Chýba GEMINI_API_KEY.")
-    return genai.Client(api_key=api_key)
 
 
 def normalize_list_field(val) -> str:
@@ -42,37 +33,10 @@ def normalize_sources(val) -> set:
     return set(cleaned)
 
 
-def embed_batch(texts: List[str], client: genai.Client, model: str) -> List[List[float]]:
-    if not texts:
-        return []
-    MAX_BATCH = 100
-    vectors: List[List[float]] = []
-    for start in range(0, len(texts), MAX_BATCH):
-        chunk = texts[start : start + MAX_BATCH]
-        response = client.models.embed_content(model=model, contents=chunk)
-        embeddings = getattr(response, "embeddings", None)
-        if embeddings is None:
-            single = getattr(response, "embedding", None)
-            if single is not None:
-                embeddings = [single]
-            elif isinstance(response, dict) and "embedding" in response:
-                embeddings = [response["embedding"]]
-        if embeddings is None:
-            raise RuntimeError("API nevrátilo embeddings.")
-        if len(embeddings) != len(chunk):
-            raise RuntimeError("Počet embeddingov nezodpovedá počtu vstupov.")
-        for emb in embeddings:
-            values = getattr(emb, "values", None) or (emb.get("values") if isinstance(emb, dict) else None)
-            if values is None:
-                raise RuntimeError("Embedding bez hodnoty 'values'.")
-            vectors.append(list(values))
-    return vectors
-
-
 def cluster_by_core(
     lo_list: List[Dict[str, Any]],
     similarity_threshold: float = SIM_THRESHOLD,
-    client: Optional[genai.Client] = None,
+    client: Optional[Any] = None,
     embedding_model: str = EMBEDDING_MODEL,
 ):
     if len(lo_list) < 2:

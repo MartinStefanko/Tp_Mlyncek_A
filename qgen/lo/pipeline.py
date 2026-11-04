@@ -1,13 +1,13 @@
 import time
 import re
 
-from context_builder import build_allowed_source_refs, build_source_name_map, parse_source_refs, resolve_source_names
-from document_language import detect_document_language
-from lo_clustering import cluster_by_core
-from lo_faithfulness import analyze_lo_faithfulness
-from lo_generation import generate_learning_objects
-from lo_relevance_to_segment import analyze_lo_relevance_to_segment
-from outputs import (
+from qgen.context_builder import build_allowed_source_refs, build_source_name_map, parse_source_refs, resolve_source_names
+from qgen.extraction.document_language import detect_document_language
+from qgen.lo.clustering import cluster_by_core
+from qgen.lo.faithfulness import analyze_lo_faithfulness
+from qgen.lo.generation import generate_learning_objects
+from qgen.lo.relevance_to_segment import analyze_lo_relevance_to_segment
+from qgen.outputs import (
     save_document_topics_txt,
     save_lo_faithfulness_report,
     save_lo_relevance_to_segment_report,
@@ -15,9 +15,9 @@ from outputs import (
     save_lo_validation_report,
     save_topic_coverage_report,
 )
-from lo_validation import validate_learning_objects
-from prerequisites import infer_prerequisites
-from topic_coverage import analyze_topic_coverage
+from qgen.lo.validation import validate_learning_objects
+from qgen.lo.prerequisites import infer_prerequisites
+from qgen.lo.topic_coverage import analyze_topic_coverage
 
 LO_MIN_FAITHFULNESS_SCORE = 3
 

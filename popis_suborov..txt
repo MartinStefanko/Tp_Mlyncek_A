@@ -1,3 +1,5 @@
+Tento súbor popisuje pôvodnú Streamlit verziu (Hlavna_cast/) a aktualizuje sa v poslednom kroku prerábky.
+
 Popis súborov projektu
 
 

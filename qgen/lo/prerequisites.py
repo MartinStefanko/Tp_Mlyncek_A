@@ -1,6 +1,6 @@
-from context_builder import parse_source_refs
-from json_load import safe_load_json
-from llm_client import generate_with_retry
+from qgen.context_builder import parse_source_refs
+from qgen.llm.json_load import safe_load_json
+from qgen.llm.client import generate_with_retry
 
 
 def infer_prerequisites(lo_list, model="gemini-2.5-flash-lite", client=None, verbose=True, document_language="sk"):

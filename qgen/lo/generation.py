@@ -1,8 +1,8 @@
 ﻿import time
 
-from context_builder import format_segment_label, make_source_ref
-from json_load import safe_load_json
-from llm_client import generate_with_retry
+from qgen.context_builder import format_segment_label, make_source_ref
+from qgen.llm.json_load import safe_load_json
+from qgen.llm.client import generate_with_retry
 
 
 def generate_learning_objects(

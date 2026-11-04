@@ -1,6 +1,6 @@
 import json
 
-from context_builder import parse_source_ref_strings
+from qgen.context_builder import parse_source_ref_strings
 
 
 BLOOM_LEVELS = {

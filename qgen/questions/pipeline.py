@@ -1,44 +1,37 @@
 import time
 import re
 
-from context_builder import (
+from qgen.context_builder import (
     build_allowed_source_refs,
     build_page_map,
     build_context_for_lo,
     build_source_name_map,
-    format_segment_label,
     parse_source_refs,
     resolve_source_names,
 )
-from document_language import detect_document_language
-from item_answerability import analyze_item_answerability
-from item_faithfulness import analyze_item_faithfulness
-from item_relevance_to_lo import analyze_item_relevance_to_lo
-from item_validation import validate_items
-from json_load import safe_load_json
-from llm_client import generate_with_retry
-from outputs import (
+from qgen.extraction.document_language import detect_document_language
+from qgen.questions.answerability import analyze_item_answerability
+from qgen.questions.faithfulness import analyze_item_faithfulness
+from qgen.questions.relevance_to_lo import analyze_item_relevance_to_lo
+from qgen.questions.validation import validate_items
+from qgen.llm.json_load import safe_load_json
+from qgen.llm.client import generate_with_retry
+from qgen.outputs import (
     save_item_faithfulness_report,
     save_item_answerability_report,
     save_item_relevance_to_lo_report,
     save_processing_time_report,
     save_item_validation_report,
-    save_python_code_correctness_report,
-    save_python_code_runtime_report,
-    save_python_code_syntax_report,
 )
-from python_code_eval import evaluate_python_code_items
 
 ITEM_MIN_SCORE = 3
 ITEM_MIN_ANSWERABILITY_SCORE = 3
 ITEM_MIN_FAITHFULNESS_SCORE = 3
-ITEM_DOCUMENT_CLASSIFICATION_MAX_CHARS = 12000
 
 
 def generate_items_for_batch(
     los_batch,
     page_map,
-    document_type_info=None,
     document_language="sk",
     model="gemini-2.5-flash-lite",
     client=None,
@@ -72,14 +65,9 @@ def generate_items_for_batch(
             f"- text:\n\"\"\"{block['context']}\"\"\""
         )
     los_text = "\n\n".join(parts)
-    document_type_info = document_type_info or {"is_python_document": False, "reason": ""}
-    python_document = bool(document_type_info.get("is_python_document", False))
-    document_type_reason = str(document_type_info.get("reason", "")).strip()
 
     prompt = build_item_generation_prompt(
         los_text,
-        python_document=python_document,
-        document_type_reason=document_type_reason,
         document_language=document_language,
     )
 
@@ -119,11 +107,6 @@ def evaluate_items_batch(items_batch, model="gemini-2.5-flash-lite", client=None
             f"- typ: {item.get('typ', '')}\n"
             f"- otazka: {item.get('otazka', '')}\n"
             f"- odpoved: {item.get('odpoved', '')}\n"
-            f"- jazyk: {item.get('jazyk', '')}\n"
-            f"- execution_mode: {item.get('execution_mode', '')}\n"
-            f"- function_name: {item.get('function_name', '')}\n"
-            f"- kod_riesenia: {item.get('kod_riesenia', '')}\n"
-            f"- test_cases: {item.get('test_cases', [])}\n"
             f"- napoveda: {item.get('napoveda', '')}\n"
             f"- citovane_zdroje: {item.get('citovane_zdroje', [])}"
         )
@@ -204,14 +187,6 @@ def generate_all_items(
         verbose=verbose,
     )
     document_language = language_info.get("language", "sk")
-    if verbose:
-        print("Item pipeline: klasifikujem dokument pre Python polozky.")
-    document_type_info = classify_document_for_python_items(
-        segmenty,
-        client=client,
-        model=evaluation_model,
-        verbose=verbose,
-    )
     lo_order = {lo.get("id"): idx for idx, lo in enumerate(los)}
     all_items = []
     next_item_id = 1
@@ -236,7 +211,6 @@ def generate_all_items(
             raw_items = generate_items_for_batch(
                 batch,
                 page_map,
-                document_type_info=document_type_info,
                 document_language=document_language,
                 model=generation_model,
                 client=client,
@@ -260,12 +234,6 @@ def generate_all_items(
                     "typ": raw.get("typ", ""),
                     "otazka": raw.get("otazka", ""),
                     "odpoved": raw.get("odpoved", ""),
-                    "jazyk": raw.get("jazyk", ""),
-                    "kod_riesenia": raw.get("kod_riesenia", ""),
-                    "execution_mode": raw.get("execution_mode", ""),
-                    "function_name": raw.get("function_name", ""),
-                    "automaticky_testovatelna": raw.get("automaticky_testovatelna", False),
-                    "test_cases": raw.get("test_cases", []),
                     "napoveda": raw.get("napoveda", ""),
                     "citovane_zdroje": raw.get("citovane_zdroje", [])
                 }
@@ -351,15 +319,11 @@ def generate_all_items(
         batch_size=evaluation_batch_size,
         document_language=document_language,
     )
-    syntax_report, runtime_report, correctness_report = evaluate_python_code_items(all_items)
     accepted_items = filter_items_variant_b(
         all_items,
         item_validation_report,
         item_faithfulness_report,
         item_answerability_report,
-        syntax_report,
-        runtime_report,
-        correctness_report,
     )
     normalized_items = normalize_accepted_items(accepted_items, valid_lo_ids)
     attach_source_names(normalized_items, source_name_map)
@@ -369,9 +333,6 @@ def generate_all_items(
         save_item_relevance_to_lo_report(item_relevance_report, output_dir)
         save_item_faithfulness_report(item_faithfulness_report, output_dir)
         save_item_answerability_report(item_answerability_report, output_dir)
-        save_python_code_syntax_report(syntax_report, output_dir)
-        save_python_code_runtime_report(runtime_report, output_dir)
-        save_python_code_correctness_report(correctness_report, output_dir)
     evaluation_seconds += time.perf_counter() - evaluation_start_reports
 
     timing_report = {
@@ -383,8 +344,6 @@ def generate_all_items(
             "items_count_all": len(all_items),
             "items_count_accepted": len(normalized_items),
             "los_count": len(los),
-            "is_python_document": document_type_info.get("is_python_document", False),
-            "document_type_reason": document_type_info.get("reason", ""),
             "document_language": document_language,
             "document_language_reason": language_info.get("reason", ""),
         },
@@ -397,14 +356,13 @@ def generate_all_items(
         print(f"Cas generovania položiek: {generation_seconds:.2f} s")
         print(f"Cas evaluacie položiek: {evaluation_seconds:.2f} s")
     if return_metrics:
-        timing_report["document_type_info"] = document_type_info
         timing_report["language_info"] = language_info
         timing_report["all_items"] = all_items
         return normalized_items, timing_report
     return normalized_items
 
 
-def build_item_generation_prompt(los_text, python_document, document_type_reason, document_language):
+def build_item_generation_prompt(los_text, document_language):
     if document_language == "en":
         return f"""
 You are an experienced teacher.
@@ -446,8 +404,8 @@ REQUIREMENTS:
 - In "function" mode, "kod_riesenia" must not contain prints, demo calls, fixed test inputs, or executable code outside the function definition.
 
 Document classification:
-- is_python_document: {"true" if python_document else "false"}
-- reason: {document_type_reason or "no justification"}
+- is_python_document: false
+- reason: no justification
 
 HARD RULE:
 - If is_python_document = false, you must not generate Python practical tasks or Python tests.
@@ -514,8 +472,8 @@ POŽIADAVKY:
 - Pri "function" sa vstupy dodávajú len cez "test_cases".
 
 Klasifikácia dokumentu:
-- is_python_document: {"true" if python_document else "false"}
-- reason: {document_type_reason or "bez zdovodnenia"}
+- is_python_document: false
+- reason: bez zdovodnenia
 
 TVRDÉ PRAVIDLO:
 - Ak is_python_document = false, NESMIEŠ generovať praktické úlohy s Python kódom ani Python testy.
@@ -613,46 +571,7 @@ def normalize_generated_item(item):
         "odpoved": item.get("odpoved", ""),
         "napoveda": item.get("napoveda", ""),
         "citovane_zdroje": normalize_sources(item.get("citovane_zdroje", [])),
-        "jazyk": str(item.get("jazyk", "")).strip().lower(),
-        "kod_riesenia": str(item.get("kod_riesenia", "")).strip(),
-        "execution_mode": str(item.get("execution_mode", "")).strip(),
-        "function_name": str(item.get("function_name", "")).strip(),
-        "automaticky_testovatelna": bool(item.get("automaticky_testovatelna", False)),
-        "test_cases": normalize_test_cases(item.get("test_cases", [])),
     }
-
-    if normalized["typ"] != "prakticka_uloha":
-        normalized["jazyk"] = ""
-        normalized["kod_riesenia"] = ""
-        normalized["execution_mode"] = ""
-        normalized["function_name"] = ""
-        normalized["automaticky_testovatelna"] = False
-        normalized["test_cases"] = []
-        return normalized
-
-    if normalized["jazyk"] != "python":
-        normalized["kod_riesenia"] = normalized["kod_riesenia"] or ""
-        normalized["execution_mode"] = ""
-        normalized["function_name"] = ""
-        normalized["automaticky_testovatelna"] = False
-        normalized["test_cases"] = []
-        return normalized
-
-    if normalized["execution_mode"] not in {"stdin_stdout", "function"}:
-        normalized["execution_mode"] = ""
-    if normalized["execution_mode"] != "function":
-        normalized["function_name"] = ""
-    if (
-        not normalized["automaticky_testovatelna"]
-        or not normalized["execution_mode"]
-        or not normalized["test_cases"]
-        or looks_non_testable_python_task(normalized)
-        or has_invalid_function_mode_code(normalized)
-    ):
-        normalized["automaticky_testovatelna"] = False
-        normalized["execution_mode"] = ""
-        normalized["function_name"] = ""
-        normalized["test_cases"] = []
     return normalized
 
 
@@ -663,106 +582,11 @@ def normalize_sources(value):
     return [text] if text else []
 
 
-def normalize_test_cases(value):
-    if not isinstance(value, list):
-        return []
-
-    normalized = []
-    for row in value:
-        if not isinstance(row, dict):
-            continue
-        normalized.append({
-            "input": row.get("input", ""),
-            "expected_output": row.get("expected_output", ""),
-        })
-    return normalized
-
-
-def looks_non_testable_python_task(item):
-    text = " ".join([
-        item.get("otazka", ""),
-        item.get("odpoved", "") if isinstance(item.get("odpoved", ""), str) else "",
-        item.get("kod_riesenia", ""),
-    ]).lower()
-    blocked_tokens = [
-        "import tkinter",
-        "from tkinter",
-        "customtkinter",
-        "import turtle",
-        "from turtle",
-        "import pygame",
-        "from pygame",
-        "import kivy",
-        "from kivy",
-        "pyqt",
-        "streamlit",
-        "flask",
-        "fastapi",
-        "web app",
-        "gui",
-        "graficke rozhranie",
-    ]
-    return any(token in text for token in blocked_tokens)
-
-
-def has_invalid_function_mode_code(item):
-    if item.get("execution_mode") != "function":
-        return False
-
-    code = str(item.get("kod_riesenia", "")).strip()
-    function_name = str(item.get("function_name", "")).strip()
-    if not code or not function_name:
-        return True
-
-    try:
-        import ast
-        tree = ast.parse(code)
-    except SyntaxError:
-        return False
-
-    found_target_function = False
-    allowed_constant_values = (ast.Constant, ast.List, ast.Tuple, ast.Set, ast.Dict)
-
-    for node in tree.body:
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            continue
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name == function_name:
-                found_target_function = True
-            continue
-        if isinstance(node, ast.ClassDef):
-            continue
-        if isinstance(node, ast.Assign):
-            if isinstance(node.value, allowed_constant_values):
-                continue
-            return True
-        if isinstance(node, ast.AnnAssign):
-            if node.value is None or isinstance(node.value, allowed_constant_values):
-                continue
-            return True
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
-            continue
-        return True
-
-    return not found_target_function
-
-
-def is_python_practical_item(item):
-    return (
-        item.get("typ") == "prakticka_uloha"
-        and str(item.get("jazyk", "")).strip().lower() == "python"
-        and str(item.get("kod_riesenia", "")).strip()
-    )
-
-
 def filter_items_variant_b(
     items,
     validation_report,
     faithfulness_report,
     answerability_report,
-    syntax_report,
-    runtime_report,
-    correctness_report,
 ):
     invalid_item_ids = extract_prefixed_ids(validation_report.get("errors", []), "Polozka")
     faithfulness_by_id = {
@@ -773,21 +597,6 @@ def filter_items_variant_b(
     answerability_by_id = {
         row.get("item_id"): row.get("answerability_score")
         for row in answerability_report.get("items", [])
-        if row.get("item_id") is not None
-    }
-    syntax_by_id = {
-        row.get("item_id"): row.get("syntax_valid")
-        for row in syntax_report.get("items", [])
-        if row.get("item_id") is not None
-    }
-    runtime_by_id = {
-        row.get("item_id"): row.get("runtime_valid")
-        for row in runtime_report.get("items", [])
-        if row.get("item_id") is not None
-    }
-    correctness_by_id = {
-        row.get("item_id"): row
-        for row in correctness_report.get("items", [])
         if row.get("item_id") is not None
     }
 
@@ -807,19 +616,6 @@ def filter_items_variant_b(
         answerability_ok = answerability_score is not None and answerability_score >= ITEM_MIN_ANSWERABILITY_SCORE
         if not (score_ok or answerability_ok):
             continue
-
-        if is_python_practical_item(item):
-            if syntax_by_id.get(item_id) is not True:
-                continue
-            if runtime_by_id.get(item_id) is not True:
-                continue
-            correctness_row = correctness_by_id.get(item_id, {})
-            total = correctness_row.get("test_cases_total", 0)
-            passed = correctness_row.get("test_cases_passed", 0)
-            if total <= 0:
-                continue
-            if passed <= 0:
-                continue
 
         accepted.append(item)
 
@@ -858,62 +654,3 @@ def extract_prefixed_ids(errors, prefix):
         if match:
             ids.add(int(match.group(1)))
     return ids
-
-
-def classify_document_for_python_items(segmenty, client=None, model="gemini-2.5-flash-lite", verbose=True):
-    source_text = build_full_document_text(segmenty, max_chars=ITEM_DOCUMENT_CLASSIFICATION_MAX_CHARS)
-    if not source_text.strip():
-        return {"is_python_document": False, "reason": "Dokument nema text pre klasifikaciu."}
-
-    prompt = f"""
-Posud nasledujuci dokument a rozhodni, ci je to dokument o programovacom jazyku Python.
-
-Vrat LEN validny JSON v tvare:
-{{
-  "is_python_document": true,
-  "reason": "stručné zdôvodnenie"
-}}
-
-Pravidla:
-- true vrat len vtedy, ak je hlavnou temou dokumentu Python alebo vyucba programovania v jazyku Python
-- false vrat pri ekonomike, matematike, fyzike, vseobecnej informatike alebo inom ne-Python dokumente
-- false vrat aj vtedy, ak sa slovo Python spomenie len okrajovo
-
-Dokument:
-\"\"\"{source_text}\"\"\"
-"""
-
-    try:
-        response = generate_with_retry(prompt, client=client, model=model, verbose=verbose)
-        parsed = safe_load_json(response.text if response else "")
-    except Exception as e:
-        if verbose:
-            print(f"Klasifikacia dokumentu pre Python polozky zlyhala: {e}")
-        return {"is_python_document": False, "reason": "Klasifikacia zlyhala, pouzity bezpecny fallback false."}
-
-    if not isinstance(parsed, dict):
-        return {"is_python_document": False, "reason": "Neplatna odpoved klasifikacie, pouzity bezpecny fallback false."}
-
-    return {
-        "is_python_document": bool(parsed.get("is_python_document", False)),
-        "reason": str(parsed.get("reason", "")).strip(),
-    }
-
-
-def build_full_document_text(segmenty, max_chars=None):
-    parts = []
-    total = 0
-    for seg in segmenty:
-        text = str(seg.get("text", "")).strip()
-        if not text:
-            continue
-        if max_chars is not None:
-            remaining = max_chars - total
-            if remaining <= 0:
-                break
-            text = text[:remaining]
-        page = seg.get("page")
-        block = f"[{format_segment_label(seg)}]\n{text}" if page is not None else text
-        parts.append(block)
-        total += len(text)
-    return "\n\n".join(parts)

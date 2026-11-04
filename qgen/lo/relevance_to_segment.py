@@ -3,8 +3,9 @@ from typing import Any, Dict, List
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-from context_builder import build_context_for_lo, build_page_map
-from lo_clustering import EMBEDDING_MODEL, embed_batch, ensure_client, normalize_list_field
+from qgen.context_builder import build_context_for_lo, build_page_map
+from qgen.llm.client import embed_batch, ensure_client
+from qgen.lo.clustering import EMBEDDING_MODEL, normalize_list_field
 
 
 def analyze_lo_relevance_to_segment(

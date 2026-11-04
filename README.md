@@ -1,3 +1,5 @@
+> Tento súbor popisuje pôvodnú Streamlit verziu (Hlavna_cast/) a aktualizuje sa v poslednom kroku prerábky.
+
 # Nástroj na automatické generovanie otázok a úloh
 
 Tento projekt predstavuje nástroj pre automatické generovanie vzdelávacích objektov, otázok, úloh, odpovedí a nápovedí z PDF dokumentov pomocou veľkého jazykového modelu.

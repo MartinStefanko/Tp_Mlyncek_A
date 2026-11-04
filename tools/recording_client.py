@@ -1,4 +1,4 @@
-"""Recording wrapper around the LLM client used by the pipeline in Hlavna_cast/.
+"""Recording wrapper around the LLM client used by the pipeline in qgen/.
 
 Exposes the subset of the `genai.Client` interface that the pipeline uses
 (`client.models.generate_content`, `client.models.embed_content`), delegates

@@ -1,6 +1,6 @@
-from context_builder import build_context_for_lo, build_page_map
-from json_load import safe_load_json
-from llm_client import generate_with_retry
+from qgen.context_builder import build_context_for_lo, build_page_map
+from qgen.llm.json_load import safe_load_json
+from qgen.llm.client import generate_with_retry
 
 
 FAITHFULNESS_MODEL = "gemini-2.5-flash-lite"

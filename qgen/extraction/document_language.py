@@ -1,5 +1,5 @@
-from json_load import safe_load_json
-from llm_client import generate_with_retry
+from qgen.llm.json_load import safe_load_json
+from qgen.llm.client import generate_with_retry
 
 
 SUPPORTED_DOCUMENT_LANGUAGES = {"sk", "en"}
