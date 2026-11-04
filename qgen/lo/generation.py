@@ -40,14 +40,14 @@ def generate_learning_objects(
         prompt = build_lo_generation_prompt(combined_text, document_language)
 
         # Step 6: invalid JSON no longer skips the batch (`except Exception: continue`);
-        # generate_json repeats the call once and then raises LLMError.
-        parsed_seg = generate_json(llm, prompt, role="lo", model=model, verbose=verbose, settings=settings)
+        # generate_json repeats the call once and then raises LLMError. expect_list: an object
+        # instead of an array (e.g. {"items": [...]}) is invalid JSON too, never an empty batch.
+        parsed_seg = generate_json(
+            llm, prompt, role="lo", model=model, verbose=verbose, settings=settings, expect_list=True
+        )
 
         if not parsed_seg:
             continue
-
-        if isinstance(parsed_seg, dict):
-            parsed_seg = [parsed_seg]
 
         end_batch = time.perf_counter()
         if verbose:
@@ -92,9 +92,9 @@ def generate_learning_objects(
             prompt_missing = build_missing_sources_prompt(lo_summary_text, batch_text_with_pages, document_language)
             # Step 6: a failed call no longer means "no sources filled" (parsed_missing = []);
             # LLMError propagates.
-            parsed_missing = generate_json(llm, prompt_missing, role="lo", model=model, verbose=verbose, settings=settings)
-            if isinstance(parsed_missing, dict):
-                parsed_missing = [parsed_missing]
+            parsed_missing = generate_json(
+                llm, prompt_missing, role="lo", model=model, verbose=verbose, settings=settings, expect_list=True
+            )
 
             src_map = {}
             if isinstance(parsed_missing, list):
@@ -151,6 +151,9 @@ def build_lo_generation_prompt(combined_text, document_language):
     if document_language == "en":
         return f"""
 You are a teacher. Extract measurable learning objectives from the following material.
+Extract ALL separately teachable parts of the material in this batch (definitions, formulas,
+procedures, examples, relationships), not a representative selection. Each such part is a
+separate learning objective.
 
 Return ONLY valid JSON: an array of objects with the following fields:
 id (unique identifier 1, 2, 3...),
@@ -171,6 +174,8 @@ Teaching material:
 """
     return f"""
 Si učiteľ. Na základe nasledujúceho materiálu extrahuj merateľné vzdelávacie ciele.
+Z materiálu vytiahni VŠETKY samostatne vyučiteľné časti učiva (definície, vzorce, postupy,
+príklady, súvislosti), nie reprezentatívny výber. Každá takáto časť je samostatný vzdelávací objekt.
 
 Output only valid JSON: an array of objects with the following fields:
 id (jedinečný identifikátor 1, 2, 3...),

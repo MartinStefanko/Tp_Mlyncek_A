@@ -27,3 +27,10 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Terminológia: LO z pôvodného kódu = tematický celok (v kóde Section). Learning object = jedna
   otázka alebo úloha vo výstupe (význam ECEH). Väčšie jednotky dokumentu pre split topics = témy (topic).
   Interné funkcie pôvodných modulov sa zatiaľ nepremenúvajú.
+
+## Cieľ generovania a referenčná nahrávka
+- Cieľ generovania: čo najviac otázok, pokrytie všetkých tematických celkov.
+  per_section je minimum, nie strop.
+- Referenčná nahrávka bude baseline_v3 (gemini-3.1-flash-lite + gemini-3.5-flash).
+  Do jej nahratia sú replay testy na nahrávke gemini-2.5 v baseline/ preskočené
+  (prompty generovania sa zmenili).

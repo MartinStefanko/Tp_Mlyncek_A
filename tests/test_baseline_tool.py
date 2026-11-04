@@ -56,9 +56,9 @@ def test_app_models_match_the_reference_baseline(baseline):
 
 
 def test_models_by_role_lists_every_role_and_embed(baseline):
-    s = Settings.model_construct(llm_model="base", llm_model_questions="q", embed_model="emb")
+    s = Settings.model_construct(llm_model="base", llm_model_questions="q", llm_model_eval="ev", embed_model="emb")
     roles = baseline.models_by_role(s)
-    assert roles == {"lo": "base", "prereq": "base", "questions": "q", "eval": "base",
+    assert roles == {"lo": "base", "prereq": "base", "questions": "q", "eval": "ev",
                      "check": "base", "topics": "base", "split": "base", "embed": "emb"}
 
 
@@ -85,7 +85,7 @@ def test_config_is_checked_before_any_work(baseline, monkeypatch, tmp_path, caps
     """Missing key -> exit 2 after printing the models; no output folder, no client, no call."""
     pdf = tmp_path / "in.pdf"
     pdf.write_bytes(b"%PDF-1.4")
-    monkeypatch.setattr(baseline, "get_settings", lambda: _env_settings(llm_model="m-lite"))
+    monkeypatch.setattr(baseline, "get_settings", lambda: _env_settings(llm_model="m-lite", llm_model_eval=""))
     out = tmp_path / "run"
     assert baseline.main([str(pdf), "--out", str(out)]) == 2
     captured = capsys.readouterr()

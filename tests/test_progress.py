@@ -16,6 +16,7 @@ from qgen.extraction.text_extraction import pdfs_to_text
 from qgen.pipeline import run_pipeline
 from qgen.progress import PIPELINE_STAGES, SubProgress, batch_count
 from tests.baseline_data import (
+    AWAITING_BASELINE_V3,
     baseline_settings,
     load_json,
     replay_client,
@@ -57,6 +58,8 @@ def test_pipeline_stages_are_job_stages():
 
 @pytest.fixture(scope="module")
 def replay_progress():
+    # Replays the gemini-2.5 recording, whose generation prompts are the old ones.
+    pytest.skip(AWAITING_BASELINE_V3)
     require_baseline()
     recorder = Recorder()
     client = replay_client()

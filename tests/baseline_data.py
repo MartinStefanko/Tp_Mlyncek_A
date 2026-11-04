@@ -40,6 +40,12 @@ def replay_client() -> ReplayClient:
     return ReplayClient(BASELINE_DIR / "llm_calls.jsonl", transforms=step4_transforms())
 
 
+# The question and section generation prompts changed (minimum of questions per section,
+# coverage of all sections, all teachable parts of a batch). The gemini-2.5 recording in
+# baseline/ has the old prompts, so the replay tests wait for the new reference recording.
+AWAITING_BASELINE_V3 = "čaká na nahrávku baseline_v3"
+
+
 # Model of the checks (topics, faithfulness, answerability) in the baseline run. It is not in
 # metrics.json; the baseline used the former constants, all gemini-2.5-flash-lite.
 BASELINE_CHECK_MODEL = "gemini-2.5-flash-lite"

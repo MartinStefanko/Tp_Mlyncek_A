@@ -7,6 +7,8 @@ Output (today's format; the units format comes in step 14):
     learning_objects.json / _all.json  accepted / all LO (tematické celky)
     questions.json / _all.json         accepted / all questions (only when some LO passed)
     reports/*.txt                      the pipeline reports in the former text format
+    reports/*_diagnostics.json         section_diagnostics, question_diagnostics (counts,
+                                       dropped questions, section_without_questions warnings)
 
 Progress goes to the console through progress_callback. This module and tools/ are the
 only places that write pipeline results to disk.
@@ -409,6 +411,13 @@ def save_questions_json(items, output_dir, all_items=None):
 
 
 # Report key (PipelineResult.reports) -> writer(report, reports_dir).
+def save_json_report(report, output_dir, filename):
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
+    write_json(path, report)
+    return path
+
+
 REPORT_WRITERS = {
     "lo_validation": save_lo_validation_report,
     "document_topics": save_document_topics_txt,
@@ -421,6 +430,8 @@ REPORT_WRITERS = {
     "item_faithfulness": save_item_faithfulness_report,
     "item_answerability": save_item_answerability_report,
     "item_processing_time": lambda report, d: save_processing_time_report(report, d, "item_processing_time_report.txt"),
+    "section_diagnostics": lambda report, d: save_json_report(report, d, "section_diagnostics.json"),
+    "question_diagnostics": lambda report, d: save_json_report(report, d, "question_diagnostics.json"),
 }
 
 
@@ -469,6 +480,14 @@ def build_parser():
         default="auto",
         help="Document language; auto = detect (default).",
     )
+    parser.add_argument(
+        "--per-section",
+        type=int,
+        choices=range(1, 11),
+        metavar="N",
+        default=None,
+        help="Minimum questions per section (tematický celok), 1–10; more when the content allows. Default: 3.",
+    )
     parser.add_argument("--verbose", action="store_true", help="Also print the pipeline's own log lines.")
     return parser
 
@@ -512,6 +531,7 @@ def main(argv=None, llm=None, embedder=None, settings: Settings = None) -> int:
         progress_callback=print_progress,
         settings=settings,
         verbose=args.verbose,
+        per_section=args.per_section,
     )
     write_results(result, args.out, segments=segments)
 

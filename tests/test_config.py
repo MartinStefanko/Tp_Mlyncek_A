@@ -30,13 +30,14 @@ def clean_env(monkeypatch):
 
 def test_defaults(clean_env):
     s = Settings(_env_file=None)
-    # Models: today's model (baseline), not gemini-4-argon from the specification. Step 7:
-    # the role models inherit QGEN_LLM_MODEL; the baseline eval model is set in .env.example.
+    # Models: current Gemini models (the gemini-2.5 baseline models return 404 to new users),
+    # not gemini-4-argon from the specification. _LO and _QUESTIONS inherit QGEN_LLM_MODEL;
+    # the eval role has its own default.
     assert s.llm_provider == "gemini"
-    assert s.llm_model == "gemini-2.5-flash-lite"
-    assert s.llm_model_lo == "gemini-2.5-flash-lite"
-    assert s.llm_model_questions == "gemini-2.5-flash-lite"
-    assert s.llm_model_eval == "gemini-2.5-flash-lite"
+    assert s.llm_model == "gemini-3.1-flash-lite"
+    assert s.llm_model_lo == "gemini-3.1-flash-lite"
+    assert s.llm_model_questions == "gemini-3.1-flash-lite"
+    assert s.llm_model_eval == "gemini-3.5-flash"
     assert s.llm_max_tokens == 8192
     assert s.embed_provider == "gemini"
     assert s.embed_model == "gemini-embedding-001"
@@ -77,14 +78,26 @@ def test_model_construct_equals_validated_defaults(clean_env):
     assert Settings.model_construct().model_dump() == Settings(_env_file=None).model_dump()
 
 
-def test_env_example_keeps_baseline_models(clean_env):
-    """Step 7: the code default of QGEN_LLM_MODEL_EVAL is inheritance; .env.example sets the
-    baseline eval model, so a deployment from .env.example keeps the baseline models."""
+def test_env_example_matches_the_code_defaults(clean_env):
+    """A deployment from .env.example uses the same models and batches as the code defaults."""
+    from_example = Settings(_env_file=REPO_ROOT / ".env.example")
+    defaults = Settings(_env_file=None)
+    for name in ("llm_model", "llm_model_lo", "llm_model_questions", "llm_model_eval", "embed_model",
+                 "lo_batch_size", "question_batch_size", "question_eval_batch_size"):
+        assert getattr(from_example, name) == getattr(defaults, name), name
+
+
+def test_replay_settings_keep_the_baseline_models(clean_env):
+    """The gemini-2.5 replay tests do not rely on the code defaults: baseline_settings()
+    passes the models of baseline/metrics.json explicitly."""
+    from tests.baseline_data import BASELINE_CHECK_MODEL, baseline_settings
+
     metrics_path = REPO_ROOT / "baseline" / "metrics.json"
     if not metrics_path.is_file():
         pytest.skip("baseline/metrics.json is missing")
     models = json.loads(metrics_path.read_text(encoding="utf-8"))["models"]
-    s = Settings(_env_file=REPO_ROOT / ".env.example")
+    s = baseline_settings()
+    assert s.llm_model == BASELINE_CHECK_MODEL
     assert s.llm_model_lo == models["lo_generation"] == models["lo_prerequisites"]
     assert s.llm_model_questions == models["item_generation"]
     assert s.llm_model_eval == models["item_evaluation"]
@@ -229,7 +242,9 @@ def test_role_models_inherit_llm_model(clean_env):
 
 def test_model_construct_inherits_too():
     s = Settings.model_construct(llm_model="base-model", llm_model_lo="lo-model")
-    assert (s.llm_model_lo, s.llm_model_questions, s.llm_model_eval) == ("lo-model", "base-model", "base-model")
+    assert (s.llm_model_lo, s.llm_model_questions, s.llm_model_eval) == ("lo-model", "base-model", "gemini-3.5-flash")
+    s = Settings.model_construct(llm_model="base-model", llm_model_eval="")
+    assert s.llm_model_eval == "base-model"  # empty = inherit
 
 
 def test_llm_max_tokens_from_env(clean_env):

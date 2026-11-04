@@ -131,22 +131,39 @@ def generate_json(
     settings: Settings,
     model: Optional[str] = None,
     verbose: bool = False,
+    expect_list: bool = False,
 ) -> Any:
-    """Parsed JSON answer. Invalid JSON twice in a row -> LLMError(invalid_json=True)."""
+    """Parsed JSON answer. Invalid JSON twice in a row -> LLMError(invalid_json=True).
+
+    expect_list=True: valid JSON that is not an array (e.g. {"items": [...]}) counts as
+    invalid JSON: same repeated call, then LLMError(invalid_json=True). It never becomes an
+    empty result. Used where the prompt asks for an array of items (sections, questions).
+    """
     _require_settings(settings)
     model = model or factory.model_for_role(role, settings)
     last_error: Optional[json.JSONDecodeError] = None
+    wrong_shape: Optional[str] = None
     for attempt in range(1, JSON_ATTEMPTS + 1):
         response = generate_text(llm, prompt, role=role, model=model, settings=settings, verbose=verbose)
         try:
-            return safe_load_json(response.text or "")
+            parsed = safe_load_json(response.text or "")
         except json.JSONDecodeError as error:
-            last_error = error
+            last_error, wrong_shape = error, None
             if verbose and attempt < JSON_ATTEMPTS:
                 print(f"LLM vratilo neplatny JSON (role {role}), opakujem volanie.")
+            continue
+        if expect_list and not isinstance(parsed, list):
+            last_error, wrong_shape = None, type(parsed).__name__
+            if verbose and attempt < JSON_ATTEMPTS:
+                print(f"LLM vratilo JSON {wrong_shape} namiesto pola (role {role}), opakujem volanie.")
+            continue
+        return parsed
+    if wrong_shape is not None:
+        message = f"LLM returned JSON of the wrong shape ({wrong_shape}, expected an array) also after the repeated call"
+    else:
+        message = "LLM returned invalid JSON also after the repeated call"
     raise LLMError(
-        "LLM returned invalid JSON also after the repeated call",
-        role=role, model=model, cause=last_error, invalid_json=True, attempts=JSON_ATTEMPTS,
+        message, role=role, model=model, cause=last_error, invalid_json=True, attempts=JSON_ATTEMPTS,
     )
 
 

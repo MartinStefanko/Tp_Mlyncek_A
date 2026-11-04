@@ -10,6 +10,7 @@ import qgen.cli as cli
 from qgen.config import Settings
 from qgen.progress import STAGE_EXTRACT
 from tests.baseline_data import (
+    AWAITING_BASELINE_V3,
     BASELINE_DIR,
     baseline_settings,
     load_json,
@@ -59,6 +60,7 @@ def baseline_segments_extraction(monkeypatch):
     return calls
 
 
+@pytest.mark.skip(reason=AWAITING_BASELINE_V3)  # replays the gemini-2.5 recording (old prompts)
 def test_cli_writes_results_and_reports(tmp_path, capsys, baseline_segments_extraction):
     require_baseline()
     out = tmp_path / "out"

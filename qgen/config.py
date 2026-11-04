@@ -7,12 +7,14 @@ The pipeline gets a `Settings` object as a parameter and passes it on to every m
 also to qgen.llm.retry and qgen.llm.factory. Only the entry points (qgen/cli.py, service/,
 tools/) call `get_settings()` (one cached instance per process); a guard test checks it.
 
-Models: QGEN_LLM_MODEL is the default model. QGEN_LLM_MODEL_LO, _QUESTIONS and _EVAL are
-optional; when not set (or empty) they inherit QGEN_LLM_MODEL. The default of
-QGEN_LLM_MODEL is the baseline model gemini-2.5-flash-lite (not gemini-4-argon from the
-specification). The baseline scored questions with gemini-2.5-flash, so .env.example sets
-QGEN_LLM_MODEL_EVAL=gemini-2.5-flash; without it the eval role inherits QGEN_LLM_MODEL.
-A model change is a separate decision and needs a new baseline.
+Models: QGEN_LLM_MODEL is the default model (default gemini-3.1-flash-lite).
+QGEN_LLM_MODEL_LO and _QUESTIONS are optional; when not set (or empty) they inherit
+QGEN_LLM_MODEL. QGEN_LLM_MODEL_EVAL has its own default gemini-3.5-flash (the question
+quality score uses a stronger model); set it empty to inherit QGEN_LLM_MODEL. With another
+provider than gemini, QGEN_LLM_MODEL_EVAL must be set (qgen.llm.factory.check_config).
+The gemini-2.5 models of the old baseline (baseline/) return 404 to new users; the replay
+tests pass them explicitly (tests/baseline_data.py). The reference recording on the
+current models will be baseline_v3.
 
 Model roles (role names of qgen.llm.factory in brackets):
     QGEN_LLM_MODEL            checks: topic extraction [topics], LO faithfulness, question
@@ -61,11 +63,13 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr = Field(
         default=SecretStr(""), validation_alias=AliasChoices("ANTHROPIC_API_KEY", "anthropic_api_key")
     )
-    llm_model: str = Field(default="gemini-2.5-flash-lite", description="Checks (faithfulness, answerability, topics).")
+    llm_model: str = Field(default="gemini-3.1-flash-lite", description="Checks (faithfulness, answerability, topics).")
     # Role models: None or "" = inherit llm_model (filled in model_post_init).
     llm_model_lo: Optional[str] = Field(default=None, description="LO generation, prerequisites.")
     llm_model_questions: Optional[str] = Field(default=None, description="Question generation.")
-    llm_model_eval: Optional[str] = Field(default=None, description="Question quality score.")
+    llm_model_eval: Optional[str] = Field(
+        default="gemini-3.5-flash", description="Question quality score; empty = inherit llm_model."
+    )
     llm_max_tokens: int = Field(
         default=8192, ge=1, description="Anthropic: max_tokens of a call (required by the Messages API)."
     )
@@ -132,7 +136,7 @@ class Settings(BaseSettings):
     local_model: Optional[str] = None
 
     def model_post_init(self, __context) -> None:
-        """Role models that are not set inherit QGEN_LLM_MODEL.
+        """Role models that are not set (None or "") inherit QGEN_LLM_MODEL.
 
         Runs also for `Settings.model_construct(...)` (used by the replay tests), so a
         constructed object has the same role models as a validated one.

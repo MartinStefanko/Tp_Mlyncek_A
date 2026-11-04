@@ -33,7 +33,7 @@ class LOPipelineResult:
     language_info         {"language": "sk"|"en", "reason": str}
     reports               report dicts, keys: lo_validation, document_topics,
                           topic_coverage, lo_relevance_to_segment, lo_faithfulness,
-                          lo_processing_time
+                          lo_processing_time, section_diagnostics
     """
 
     learning_objects: list[dict]
@@ -57,6 +57,15 @@ def attach_source_names(los, source_name_map):
     for lo in los:
         lo["zdroj"] = resolve_source_names(lo.get("citovane_zdroje", []), source_name_map)
     return los
+
+
+def section_diagnostics(generated: int, after_clustering: int, accepted: int) -> dict:
+    """Counts of tematické celky (sections) per step of the LO pipeline."""
+    return {
+        "sections_generated": generated,
+        "sections_after_clustering": after_clustering,
+        "sections_accepted": accepted,
+    }
 
 
 def _lo_evaluation_reports(
@@ -187,10 +196,12 @@ def generate_lo_pipeline(
                 "lo_relevance_to_segment": empty_relevance_report,
                 "lo_faithfulness": empty_faithfulness_report,
                 "lo_processing_time": timing_report,
+                "section_diagnostics": section_diagnostics(0, 0, 0),
             },
         )
 
     generation_start = time.perf_counter()
+    sections_generated = len(los)
     los = cluster_by_core(
         los,
         similarity_threshold=settings.cluster_sim_threshold,
@@ -268,6 +279,7 @@ def generate_lo_pipeline(
             "lo_relevance_to_segment": relevance_report,
             "lo_faithfulness": faithfulness_report,
             "lo_processing_time": timing_report,
+            "section_diagnostics": section_diagnostics(sections_generated, len(los), len(normalized_los)),
         },
     )
 

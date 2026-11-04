@@ -8,6 +8,10 @@ with the replay client and compares the results with the baseline outputs. The o
 allowed differences are listed in tests/recording_transforms.py.
 
 The recording is not in git. When it is missing, the test is skipped.
+
+Skipped for now: the generation prompts changed (minimum of questions per section,
+coverage of all sections), so the gemini-2.5 recording no longer matches. The test is not
+adapted to pass; it waits for the new reference recording baseline_v3.
 """
 
 import json
@@ -18,9 +22,11 @@ import pytest
 from qgen.cli import normalize_lo_for_export
 from qgen.lo.pipeline import generate_lo_pipeline
 from qgen.questions.pipeline import generate_all_items
-from tests.baseline_data import baseline_settings
+from tests.baseline_data import AWAITING_BASELINE_V3, baseline_settings
 from tests.recording_transforms import REMOVED_CALL_MARKERS, REMOVED_ITEM_FIELDS, step4_transforms
 from tests.replay_client import ReplayClient
+
+pytestmark = pytest.mark.skip(reason=AWAITING_BASELINE_V3)
 
 BASELINE_DIR = Path(__file__).resolve().parent.parent / "baseline"
 REQUIRED_FILES = (

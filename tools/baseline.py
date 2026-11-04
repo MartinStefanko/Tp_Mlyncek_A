@@ -222,6 +222,13 @@ def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, 
             "by_method": dict(recorder.counts),
             "failed": recorder.errors,
         },
+        # Section counts, questions per section, dropped questions, coverage warnings.
+        "section_diagnostics": reports.get("section_diagnostics"),
+        "question_diagnostics": {
+            key: value
+            for key, value in (reports.get("question_diagnostics") or {}).items()
+            if key != "sections_without_content"
+        } or None,
     }
 
 

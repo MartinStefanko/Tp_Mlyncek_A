@@ -313,7 +313,12 @@ def test_parse_retry_after_forms():
 # --- factory --------------------------------------------------------------------------
 
 def _settings(**values):
+    """Settings without .env. With another provider than gemini the eval model inherits
+    QGEN_LLM_MODEL (empty QGEN_LLM_MODEL_EVAL), unless the test sets it: its code default
+    gemini-3.5-flash would be rejected for that provider."""
     base = {"gemini_api_key": "g-key"}
+    if values.get("llm_provider", "gemini") != "gemini":
+        base["llm_model_eval"] = ""
     base.update(values)
     return Settings(_env_file=None, **base)
 
@@ -419,9 +424,10 @@ def test_check_config_lists_every_problem(clean_env):
     with pytest.raises(LLMConfigError) as info:
         factory.check_config(s)
     message = str(info.value)
-    for part in ("ANTHROPIC_API_KEY", "QGEN_LLM_MODEL=", "QGEN_EMBED_BASE_URL", "QGEN_EMBED_MODEL="):
+    for part in ("ANTHROPIC_API_KEY", "QGEN_LLM_MODEL=", "QGEN_EMBED_BASE_URL", "QGEN_EMBED_MODEL=",
+                 "QGEN_LLM_MODEL_EVAL=gemini-3.5-flash"):  # own default, not inherited
         assert part in message
-    assert "QGEN_LLM_MODEL_EVAL" not in message  # inherited from QGEN_LLM_MODEL, reported there
+    assert "QGEN_LLM_MODEL_LO" not in message  # inherited from QGEN_LLM_MODEL, reported there
 
 
 def test_openai_compatible_key_may_be_empty(clean_env):
@@ -444,14 +450,14 @@ def test_check_config_builds_the_clients(clean_env):
 
 def test_gemini_model_with_other_provider_is_rejected(clean_env):
     # The usual mistake: the provider changed, the default Gemini model stayed.
-    with pytest.raises(LLMConfigError, match="QGEN_LLM_MODEL=gemini-2.5-flash-lite is a Gemini model"):
+    with pytest.raises(LLMConfigError, match="QGEN_LLM_MODEL=gemini-3.1-flash-lite is a Gemini model"):
         factory.get_llm("lo", _settings(llm_provider="openai_compatible", llm_base_url="http://a/v1"))
     # A role model set to a Gemini model (as in .env.example) is named by its own variable.
     s = _settings(llm_provider="anthropic", anthropic_api_key="a", llm_model="claude-test",
-                  llm_model_eval="gemini-2.5-flash")
+                  llm_model_eval="gemini-3.5-flash")
     with pytest.raises(LLMConfigError) as info:
         factory.check_config(s)
-    assert "QGEN_LLM_MODEL_EVAL=gemini-2.5-flash" in str(info.value)
+    assert "QGEN_LLM_MODEL_EVAL=gemini-3.5-flash" in str(info.value)
     assert "QGEN_LLM_MODEL=" not in str(info.value)  # the base model is fine
     # Inherited role models are reported once, as QGEN_LLM_MODEL.
     s = _settings(llm_provider="openai_compatible", llm_base_url="http://a/v1", llm_model="gemini-x")
@@ -465,7 +471,7 @@ def test_gemini_model_with_other_provider_is_rejected(clean_env):
 
 
 def test_env_example_with_another_provider_needs_the_eval_model_changed(clean_env):
-    """The baseline line QGEN_LLM_MODEL_EVAL=gemini-2.5-flash must be changed with the provider."""
+    """The line QGEN_LLM_MODEL_EVAL=gemini-3.5-flash must be changed with the provider."""
     s = Settings(_env_file=REPO / ".env.example", llm_provider="openai_compatible",
                  llm_base_url="http://a/v1", llm_model="qwen")
     assert s.llm_model_lo == s.llm_model_questions == "qwen"
@@ -476,7 +482,9 @@ def test_env_example_with_another_provider_needs_the_eval_model_changed(clean_en
 def test_role_models_follow_inheritance(clean_env):
     s = _settings(llm_model="base", llm_model_questions="q-model")
     assert [factory.model_for_role(r, s) for r in ("lo", "prereq", "questions", "eval", "check", "topics", "split")] == [
-        "base", "base", "q-model", "base", "base", "base", "base"]
+        "base", "base", "q-model", "gemini-3.5-flash", "base", "base", "base"]
+    inherit_eval = _settings(llm_model="base", llm_model_eval="")
+    assert factory.model_for_role("eval", inherit_eval) == "base"
 
 
 def test_factory_and_retry_require_settings():

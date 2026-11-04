@@ -20,8 +20,9 @@ class PipelineResult:
     """learning_objects / questions: accepted results; reports: all report dicts by name.
 
     Report keys: lo_validation, document_topics, topic_coverage, lo_relevance_to_segment,
-    lo_faithfulness, lo_processing_time and, when questions ran, item_validation,
-    item_relevance_to_lo, item_faithfulness, item_answerability, item_processing_time.
+    lo_faithfulness, lo_processing_time, section_diagnostics and, when questions ran,
+    item_validation, item_relevance_to_lo, item_faithfulness, item_answerability,
+    item_processing_time, question_diagnostics.
     """
 
     learning_objects: list[dict]
@@ -52,8 +53,11 @@ def run_pipeline(
     *,
     settings: Settings,
     verbose: bool = False,
+    per_section: Optional[int] = None,
 ) -> PipelineResult:
     """language: None / "auto" = detect (both pipelines detect, as today); "sk" / "en" = use it.
+
+    per_section: options.questions.per_section, the minimum of questions per section (None = 3).
 
     llm / embedder: the clients for all LLM / embedding calls; None = qgen.llm.factory.
     Raises qgen.llm.errors.LLMError when an LLM or embedding call fails for good (after the
@@ -81,6 +85,7 @@ def run_pipeline(
             document_language=language,
             progress_callback=progress_callback,
             settings=settings,
+            per_section=per_section,
         )
         reports.update(question_result.reports)
     return PipelineResult(

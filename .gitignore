@@ -29,10 +29,11 @@ Hlavna_cast/ucebny_material/
 tests/fixtures/
 baseline/*
 !baseline/metrics.json
-# Further baseline runs (tools/baseline.py --out baseline_v2): same rule as baseline/.
-# The recording (llm_calls.jsonl, segments.json, outputs) contains document text and stays local.
-baseline_v2/*
-!baseline_v2/metrics.json
+# Further baseline runs (tools/baseline.py --out baseline_v2, baseline_v3, baseline_argon, ...):
+# same rule as baseline/. The recording (llm_calls.jsonl, segments.json, outputs, reports/)
+# contains document text and stays local.
+/baseline_*/*
+!/baseline_*/metrics.json
 
 # Versioned JSON: contract schemas and test fixtures (override *.json above)
 !schemas/*.json
