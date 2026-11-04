@@ -3,7 +3,8 @@
 - completed / cancelled: the PDFs are deleted at once (the worker also does it right after
   the final state; this catches the rest);
 - failed: the PDFs stay until retryable_until (QGEN_FAILED_INPUT_TTL_HOURS), then deleted;
-- every final job is deleted completely QGEN_RESULT_TTL_DAYS after finished_at;
+- every final job is deleted completely QGEN_RESULT_TTL_DAYS after finished_at, together
+  with its external_ref reservation (when `refs` is given);
 - active jobs are never deleted;
 - housekeeping: leftovers of crashed operations (.staging-*, .deleting-*, *.tmp) and lock
   files without a job, older than `stale_after`.
@@ -13,8 +14,9 @@ import logging
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
+from service.jobs.refs import ExternalRefs, delete_job_and_ref
 from service.jobs.store import JobNotFound, JobStore, TMP_SUFFIX, JOB_ID_PATTERN
 
 if TYPE_CHECKING:
@@ -38,6 +40,7 @@ def run_cleanup(
     *,
     result_ttl: timedelta,
     stale_after: timedelta = STALE_AFTER,
+    refs: Optional[ExternalRefs] = None,
 ) -> CleanupResult:
     result = CleanupResult()
     for job in store.iter_jobs():
@@ -45,7 +48,7 @@ def run_cleanup(
             continue
         try:
             if job.finished_at is not None and now >= job.finished_at + result_ttl:
-                store.delete_job(job.job_id)
+                delete_job_and_ref(store, refs, job)
                 result.jobs_deleted.append(job.job_id)
                 continue
             if _inputs_expired(job.status, job.retryable_until, now) and store.delete_inputs(job.job_id):
@@ -63,8 +66,10 @@ def run_cleanup(
     return result
 
 
-def run_cleanup_from_settings(store: JobStore, settings: "Settings", now: datetime) -> CleanupResult:
-    return run_cleanup(store, now, result_ttl=timedelta(days=settings.result_ttl_days))
+def run_cleanup_from_settings(
+    store: JobStore, settings: "Settings", now: datetime, refs: Optional[ExternalRefs] = None
+) -> CleanupResult:
+    return run_cleanup(store, now, result_ttl=timedelta(days=settings.result_ttl_days), refs=refs)
 
 
 def _inputs_expired(status: str, retryable_until, now: datetime) -> bool:

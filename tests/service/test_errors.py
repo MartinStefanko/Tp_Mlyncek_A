@@ -5,7 +5,7 @@ import pytest
 from qgen.contract import API_ERROR_CODES
 from service.main import create_app
 
-from .conftest import CALLBACK_URL, PDF, assert_error
+from .conftest import CALLBACK_URL, PDF, assert_error, make_pdf
 
 PDF_FILE = [("files", ("eko.pdf", PDF, "application/pdf"))]
 
@@ -37,7 +37,7 @@ def test_invalid_options(api, raw):
     assert error["details"]["errors"]
     for item in error["details"]["errors"]:
         assert set(item) == {"loc", "msg", "type"}
-    assert api.backend._jobs == {}
+    assert api.job_count() == 0
 
 
 def test_invalid_options_details_point_to_field(api):
@@ -124,11 +124,11 @@ def test_job_not_retryable(api):
 
 
 def test_file_too_large(api_factory):
-    api = api_factory(max_upload_mb=0.001)  # 1048 bytes
-    big = PDF + b"0" * 2000
+    ok = make_pdf(pad=1000)
+    big = make_pdf(pad=2000)
+    api = api_factory(max_upload_mb=(len(ok) + 10) / (1024 * 1024))
     error = assert_error(api.create(files=[("files", ("big.pdf", big, "application/pdf"))]), 413, "file_too_large")
     assert error["details"]["file"] == "big.pdf"
-    ok = PDF + b"0" * 1000
     assert api.create(files=[("files", ("ok.pdf", ok, "application/pdf"))]).status_code == 202
 
 
@@ -198,6 +198,7 @@ class _BrokenBackend:
         raise KeyError("secret detail")
 
 
+@pytest.mark.mock_only  # independent of the backend
 def test_unexpected_error_is_500_without_details(api):
     from fastapi.testclient import TestClient
 

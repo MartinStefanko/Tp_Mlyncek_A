@@ -1,6 +1,13 @@
-"""Job queue interface. The RQ implementation comes in step 10; tests use InMemoryJobQueue."""
+"""Job queue interface. The RQ implementation comes in step 10; tests use InMemoryJobQueue.
 
-from typing import Protocol
+RedisListJobQueue is a stop-gap for QGEN_BACKEND=real until step 10: the API puts job ids
+into a Redis list; nothing consumes it yet.
+"""
+
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    import redis
 
 
 class JobQueue(Protocol):
@@ -27,3 +34,17 @@ class InMemoryJobQueue:
 
     def contains(self, job_id: str) -> bool:
         return job_id in self.waiting or job_id in self.running
+
+
+class RedisListJobQueue:
+    """Job ids in a Redis list (RPUSH). `contains` sees only waiting jobs (no worker yet)."""
+
+    def __init__(self, client: "redis.Redis", name: str = "qgen:queue") -> None:
+        self._redis = client
+        self.name = name
+
+    def enqueue(self, job_id: str) -> None:
+        self._redis.rpush(self.name, job_id)
+
+    def contains(self, job_id: str) -> bool:
+        return self._redis.lpos(self.name, job_id) is not None

@@ -11,5 +11,9 @@ numpy
 opencv-python
 scikit-learn
 filelock
+# API real backend (queue, external_ref reservations)
+redis
+# tests only
+fakeredis
 
 #pip install -r requirements.txt

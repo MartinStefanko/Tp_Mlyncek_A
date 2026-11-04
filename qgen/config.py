@@ -128,6 +128,9 @@ class Settings(BaseSettings):
     result_ttl_days: float = Field(default=7, gt=0)
     failed_input_ttl_hours: float = Field(default=24, gt=0)
 
+    # --- Queue -------------------------------------------------------------------------
+    redis_url: str = Field(default="redis://redis:6379/0", description="Queue, progress cache, external_ref reservations.")
+
     # --- Webhooks ----------------------------------------------------------------------
     webhook_secret: SecretStr = SecretStr("")
     webhook_allowed_hosts: str = Field(default="", description="Comma-separated hosts; empty = webhooks off.")

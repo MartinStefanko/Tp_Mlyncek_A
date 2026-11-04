@@ -9,7 +9,9 @@ import pytest
 from qgen.contract import CreateJobResponse, JobListResponse, JobStatus, Report, UnitsResult
 from service.mock.backend import STAGES
 
-from .conftest import CALLBACK_URL, DURATION_S, PDF, assert_error
+from .conftest import CALLBACK_URL, DURATION_S, PDF, assert_error, make_pdf
+
+PDF_B = make_pdf(pages=2)
 
 CONTRACT_FIXTURES = Path(__file__).resolve().parents[1] / "contract" / "fixtures"
 MOCK_FIXTURES = Path(__file__).resolve().parents[2] / "service" / "mock" / "fixtures"
@@ -19,6 +21,7 @@ def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@pytest.mark.mock_only
 def test_full_flow(api):
     response = api.create({"external_ref": "gen-1", "callback_url": CALLBACK_URL, "split": {"mode": "topics"}})
     assert response.status_code == 202
@@ -71,6 +74,7 @@ def test_full_flow(api):
     assert api.notifier.events(job_id) == ["job.stage_changed"] * len(STAGES) + ["job.completed"]
 
 
+@pytest.mark.mock_only
 def test_job_completes_after_mock_duration(api):
     job_id = api.create_id({"external_ref": "gen-time"})
     api.clock.advance(DURATION_S - 0.5)
@@ -81,6 +85,7 @@ def test_job_completes_after_mock_duration(api):
     assert status["updated_at"] == "2026-11-03T10:00:30Z"
 
 
+@pytest.mark.mock_only
 def test_slow_job_takes_five_times_longer(api):
     job_id = api.create_id({"external_ref": "mock-slow-1"})
     api.clock.advance(DURATION_S * 4.9)
@@ -89,6 +94,7 @@ def test_slow_job_takes_five_times_longer(api):
     assert api.status(job_id)["status"] == "completed"
 
 
+@pytest.mark.mock_only
 def test_mock_duration_setting(api_factory):
     api = api_factory(mock_duration_s=4)
     job_id = api.create_id()
@@ -105,7 +111,7 @@ def test_job_without_external_ref(api):
 
 def test_list_by_external_ref_newest_first(api):
     first = api.create_id({"external_ref": "gen-list"})
-    api.run_to_end()
+    api.finish(first)
     assert api.client.delete(f"/v1/jobs/{first}", headers=api.headers).status_code == 204
     second = api.create_id({"external_ref": "gen-list"})
     api.create_id({"external_ref": "other"})
@@ -122,7 +128,7 @@ def test_list_by_external_ref_newest_first(api):
 
 def test_stored_options_are_complete(api):
     job_id = api.create_id({"external_ref": "gen-opt", "questions": {"types": ["open"]}})
-    stored = api.backend._jobs[job_id].options
+    stored = api.stored_options(job_id)
     assert stored.model_dump(mode="json") == {
         "external_ref": "gen-opt",
         "callback_url": None,
@@ -136,7 +142,7 @@ def test_stored_options_are_complete(api):
 def test_defaults_come_from_settings(api_factory):
     api = api_factory(default_lesson_minutes=90, ocr_enabled=True)
     job_id = api.create_id({"split": {"mode": "topics"}})
-    stored = api.backend._jobs[job_id].options
+    stored = api.stored_options(job_id)
     assert stored.split.lesson_minutes == 90
     assert stored.extraction.ocr is True
 
@@ -144,13 +150,13 @@ def test_defaults_come_from_settings(api_factory):
 def test_multiple_files_and_files_brackets_field(api):
     files = [
         ("files[]", ("a.pdf", PDF, "application/pdf")),
-        ("files[]", ("b.pdf", PDF + b"x", "application/pdf")),
+        ("files[]", ("b.pdf", PDF_B, "application/pdf")),
         ("files", ("c.pdf", PDF, "application/pdf")),
     ]
     response = api.create({"external_ref": "gen-multi"}, files=files)
     assert response.status_code == 202, response.text
-    stored = api.backend._jobs[response.json()["job_id"]]
-    assert sorted(stored.files) == [("a.pdf", len(PDF)), ("b.pdf", len(PDF) + 1), ("c.pdf", len(PDF))]
+    stored = api.stored_files(response.json()["job_id"])
+    assert stored == [("a.pdf", len(PDF)), ("b.pdf", len(PDF_B)), ("c.pdf", len(PDF))]
 
 
 def test_options_field_may_be_missing(api):
@@ -188,7 +194,7 @@ def test_health_info_docs(api):
     info = api.client.get("/v1/info", headers=api.headers)
     assert info.status_code == 200
     body = info.json()
-    assert body["backend"] == "mock"
+    assert body["backend"] == api.kind
     assert body["limits"]["max_files"] == 10
     assert body["option_defaults"]["lesson_minutes"] == 45
     assert "test-key" not in info.text and "test-secret" not in info.text

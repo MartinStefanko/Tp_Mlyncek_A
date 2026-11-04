@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 
 from qgen.contract import CreateJobResponse, ErrorResponse, JobLinks, JobListResponse, JobStatus, Report, UnitsResult
 from service.backend import CreateJobRequest
-from service.intake import parse_options, read_pdf_files
+from service.intake import check_ocr, inspect_pdfs, parse_options, read_pdf_files
 from service.routes.deps import Backend, Owner, Settings
 
 router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
@@ -57,8 +57,13 @@ async def create_job(
         raise RequestValidationError(
             [{"type": "missing", "loc": ("body", "files"), "msg": "Field required", "input": None}]
         )
+    # Order of the checks: kap. 3 – Význam odpovede 202 (API key is the Owner dependency).
     resolved = parse_options(options, settings)
+    if settings.backend == "real":
+        check_ocr(resolved)
     pdfs = await read_pdf_files(uploads, settings)
+    if settings.backend == "real":
+        pdfs = await run_in_threadpool(inspect_pdfs, pdfs, settings)
     created = await run_in_threadpool(backend.create, CreateJobRequest(owner=owner, options=resolved, files=pdfs))
     if created.replayed:
         response.status_code = 200

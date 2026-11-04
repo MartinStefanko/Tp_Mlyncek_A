@@ -286,6 +286,13 @@ Príklad: `"external_ref": "mock-fail-gen-42"`.
 - Výsledky sa nemažú po 7 dňoch. PDF sa neukladá.
 - Webhooky posiela API proces, nie worker. Opakovania sa pri reštarte stratia.
 
+### Skutočný backend (rozpracované)
+
+`QGEN_BACKEND=real` zapne skutočný backend: úlohy v `QGEN_DATA_DIR/jobs/{id}/job.json`,
+rezervácia `external_ref` a fronta v Redise (`QGEN_REDIS_URL`). API kontroluje aj počet strán,
+heslo PDF a dostupnosť OCR. Worker zatiaľ nie je (krok 10), preto úlohy ostanú v stave `queued`.
+Potrebuje `requirements.txt` (pypdf, redis, qgen/extraction).
+
 ## Pipeline z príkazového riadka (CLI)
 
 CLI spustí extrakciu, tematické celky a otázky. Výsledky a reporty zapíše do priečinka.

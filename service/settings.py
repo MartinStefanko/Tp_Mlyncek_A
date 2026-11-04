@@ -12,7 +12,9 @@ from qgen.config import Settings
 
 
 class ServiceSettings(Settings):
-    backend: Literal["mock"] = Field(default="mock", description="Job backend; only 'mock' exists now.")
+    backend: Literal["mock", "real"] = Field(
+        default="mock", description="Job backend: 'mock' (simulation) or 'real' (job.json + Redis)."
+    )
 
     # Mock only
     mock_duration_s: float = Field(default=30, gt=0, description="Simulated duration of one job.")

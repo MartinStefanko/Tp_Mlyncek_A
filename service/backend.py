@@ -1,9 +1,9 @@
 """Interface between the HTTP routes and the job implementation.
 
 Routes validate the request (API key, options, files) and then call a JobBackend.
-Now there is only MockBackend (in-memory simulation, service/mock/); the real
-backend (job.json in /data, RQ queue) will implement the same interface, so the
-routes do not change.
+MockBackend (in-memory simulation, service/mock/) and RealBackend (job.json in
+QGEN_DATA_DIR, Redis; service/real_backend.py) implement the same interface, so the
+routes do not change. QGEN_BACKEND selects one.
 
 Backend methods raise service.errors.ApiError for API errors (404, 409, 429, ...).
 `owner` identifies the API key; external_ref is unique per owner and a job of
@@ -22,6 +22,7 @@ class UploadedFile:
 
     filename: str
     content: bytes
+    pages: Optional[int] = None  # filled by intake.inspect_pdfs (real backend only)
 
 
 @dataclass(frozen=True)

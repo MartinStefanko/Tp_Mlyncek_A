@@ -1,5 +1,12 @@
-"""Checks of POST /v1/jobs input that do not depend on the backend: options and files."""
+"""Checks of POST /v1/jobs input: options and files.
 
+parse_options and read_pdf_files run for every backend. check_ocr and inspect_pdfs run
+only for the real backend (they need qgen.extraction and pypdf, which the mock image
+does not have); they are imported lazily.
+"""
+
+import dataclasses
+import io
 from typing import Optional
 
 from fastapi import UploadFile
@@ -49,10 +56,60 @@ def check_callback_host(options: JobOptions, settings: ServiceSettings) -> None:
     )
 
 
+def check_ocr(options: JobOptions) -> None:
+    """extraction.ocr=true needs OCR in this image (qgen.extraction.ensure_ocr_available)."""
+    if not (options.extraction and options.extraction.ocr):
+        return
+    from qgen.extraction.text_extraction import OcrUnavailableError, ensure_ocr_available
+
+    try:
+        ensure_ocr_available()
+    except OcrUnavailableError:
+        raise invalid_options(
+            "extraction.ocr: OCR is not available in this service.",
+            [{"loc": ["extraction", "ocr"], "msg": "OCR (easyocr) is not installed.", "type": "ocr_unavailable"}],
+        ) from None
+
+
+def inspect_pdfs(files: list[UploadedFile], settings: ServiceSettings) -> list[UploadedFile]:
+    """Open each PDF with pypdf (the library of qgen.extraction); return the files with `pages`.
+
+    Not readable or password protected → 415 unsupported_file; more than QGEN_MAX_PAGES
+    pages in all files together → 413 file_too_large. CPU work: call it in a thread.
+    """
+    from pypdf import PdfReader
+
+    result: list[UploadedFile] = []
+    total = 0
+    for upload in files:
+        try:
+            reader = PdfReader(io.BytesIO(upload.content))
+            encrypted = reader.is_encrypted
+            pages = None if encrypted else len(reader.pages)
+        except Exception:  # noqa: BLE001 – any parser error means "not a usable PDF"
+            raise _unsupported(upload.filename, "unreadable", "cannot be opened as a PDF") from None
+        if encrypted:
+            raise _unsupported(upload.filename, "encrypted", "is password protected")
+        total += pages
+        result.append(dataclasses.replace(upload, pages=pages))
+    if total > settings.max_pages:
+        raise ApiError(
+            413,
+            "file_too_large",
+            f"Too many pages: {total} (limit {settings.max_pages} for all files together).",
+            {"max_pages": settings.max_pages, "pages": total},
+        )
+    return result
+
+
+def _unsupported(name: str, reason: str, text: str) -> ApiError:
+    return ApiError(415, "unsupported_file", f"File '{name}' {text}.", {"file": name, "reason": reason})
+
+
 async def read_pdf_files(uploads: list[UploadFile], settings: ServiceSettings) -> list[UploadedFile]:
     """Check count, size and PDF header; return the file contents.
 
-    Page count and password protection are not checked yet.
+    Page count and password protection: inspect_pdfs (real backend).
     """
     if len(uploads) > settings.max_files:
         raise ApiError(

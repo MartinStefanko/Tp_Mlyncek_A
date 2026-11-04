@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from qgen.contract import WebhookPayload
@@ -196,12 +197,14 @@ def test_timeout_is_set_on_client():
 # --- events from the mock ---------------------------------------------------------------------
 
 
+@pytest.mark.mock_only
 def test_events_without_callback_url(api):
     api.create_id({"external_ref": "no-callback"})
     api.run_to_end()
     assert api.notifier.sent == []
 
 
+@pytest.mark.mock_only
 def test_stage_changed_at_most_once_per_stage(api):
     job_id = api.create_id({"external_ref": "gen-hook", "callback_url": CALLBACK_URL})
     for _ in range(200):
@@ -219,6 +222,7 @@ def test_stage_changed_at_most_once_per_stage(api):
     assert [p.progress for p in events] == sorted(p.progress for p in events)
 
 
+@pytest.mark.mock_only
 def test_last_webhook_equals_job_state(api):
     job_id = api.create_id({"external_ref": "gen-last", "callback_url": CALLBACK_URL})
     api.run_to_end()
@@ -274,6 +278,7 @@ def test_webhooks_end_to_end_through_http():
     assert WebhookPayload.model_validate_json(completed[-1].content).status == "completed"
 
 
+@pytest.mark.mock_only
 def test_failed_event_has_error(api):
     api.create_id({"external_ref": "mock-fail-hook", "callback_url": CALLBACK_URL})
     api.run_to_end()

@@ -2,9 +2,11 @@
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from qgen.contract import JobStatus
 
-from .conftest import CALLBACK_URL, DURATION_S, PDF, assert_error
+from .conftest import CALLBACK_URL, DURATION_S, assert_error, make_pdf
 
 # --- idempotency ------------------------------------------------------------------------------
 
@@ -13,12 +15,12 @@ def test_same_external_ref_returns_original_job(api):
     first = api.create({"external_ref": "gen-01JB7Q3K"})
     assert first.status_code == 202
     job_id = first.json()["job_id"]
-    api.clock.advance(DURATION_S / 2)
+    api.start(job_id)
 
     # Different options and a different PDF are ignored.
     second = api.create(
         {"external_ref": "gen-01JB7Q3K", "split": {"mode": "lessons", "lesson_count": 3}},
-        files=[("files", ("other.pdf", PDF + b"other", "application/pdf"))],
+        files=[("files", ("other.pdf", make_pdf(pages=2), "application/pdf"))],
     )
     assert second.status_code == 200
     assert second.json() == {
@@ -27,14 +29,13 @@ def test_same_external_ref_returns_original_job(api):
         "replayed": True,
         "links": {"self": f"/v1/jobs/{job_id}"},
     }
-    assert len(api.backend._jobs) == 1
-    assert api.backend._jobs[job_id].options.split.mode == "single"
+    assert api.job_count() == 1
+    assert api.stored_options(job_id).split.mode == "single"
 
 
 def test_replay_of_failed_job(api):
     job_id = api.create_id({"external_ref": "mock-fail-idem"})
-    api.run_to_end()
-    assert api.status(job_id)["status"] == "failed"
+    api.fail(job_id)
 
     replay = api.create({"external_ref": "mock-fail-idem"})
     assert replay.status_code == 200
@@ -53,7 +54,7 @@ def test_replay_does_not_count_against_active_limit(api_factory):
 
 def test_new_job_after_delete_of_finished_job(api):
     first = api.create_id({"external_ref": "gen-del"})
-    api.run_to_end()
+    api.finish(first)
     assert api.client.delete(f"/v1/jobs/{first}", headers=api.headers).status_code == 204
 
     again = api.create({"external_ref": "gen-del"})
@@ -87,8 +88,7 @@ def test_external_ref_is_unique_per_api_key(api_factory):
 
 def test_delete_running_job_cancels_it(api):
     job_id = api.create_id({"external_ref": "gen-run", "callback_url": CALLBACK_URL})
-    api.clock.advance(DURATION_S / 2)
-    assert api.status(job_id)["status"] == "running"
+    api.start(job_id)
 
     response = api.client.delete(f"/v1/jobs/{job_id}", headers=api.headers)
     assert response.status_code == 200
@@ -98,9 +98,10 @@ def test_delete_running_job_cancels_it(api):
     # Record stays and does not move on.
     api.clock.advance(DURATION_S * 2)
     assert api.status(job_id)["status"] == "cancelled"
-    assert api.notifier.events(job_id)[-1] == "job.cancelled"
-    assert api.notifier.events(job_id).count("job.cancelled") == 1
-    assert "job.completed" not in api.notifier.events(job_id)
+    if api.kind == "mock":  # real backend: webhook job.cancelled comes in step 11
+        assert api.notifier.events(job_id)[-1] == "job.cancelled"
+        assert api.notifier.events(job_id).count("job.cancelled") == 1
+        assert "job.completed" not in api.notifier.events(job_id)
 
     assert_error(api.client.get(f"/v1/jobs/{job_id}/result", headers=api.headers), 409, "job_not_completed")
     assert_error(api.client.get(f"/v1/jobs/{job_id}/report", headers=api.headers), 409, "job_not_completed")
@@ -116,8 +117,7 @@ def test_delete_queued_job_cancels_it(api):
 
 def test_delete_finished_job_removes_everything(api):
     job_id = api.create_id({"external_ref": "gen-done"})
-    api.run_to_end()
-    assert api.status(job_id)["status"] == "completed"
+    api.finish(job_id)
 
     response = api.client.delete(f"/v1/jobs/{job_id}", headers=api.headers)
     assert response.status_code == 204
@@ -140,6 +140,7 @@ def test_delete_cancelled_job_removes_it(api):
 # --- mock-fail- and retry -------------------------------------------------------------------
 
 
+@pytest.mark.mock_only
 def test_mock_fail_fails_in_questions_with_llm_error(api):
     job_id = api.create_id({"external_ref": "mock-fail-1", "callback_url": CALLBACK_URL})
     api.run_to_end()
@@ -166,7 +167,7 @@ def test_mock_fail_fails_in_questions_with_llm_error(api):
 
 def test_retry_runs_failed_job_again_and_completes(api):
     job_id = api.create_id({"external_ref": "mock-fail-2", "callback_url": CALLBACK_URL})
-    api.run_to_end()
+    api.fail(job_id)
     api.clock.advance(3600)
 
     response = api.client.post(f"/v1/jobs/{job_id}/retry", headers=api.headers)
@@ -176,16 +177,15 @@ def test_retry_runs_failed_job_again_and_completes(api):
     assert (body.status, body.stage, body.progress, body.error, body.retryable_until) == ("queued", None, 0.0, None, None)
 
     api.notifier.sent.clear()
-    api.run_to_end()
-    assert api.status(job_id)["status"] == "completed"
+    api.finish(job_id)
     assert api.client.get(f"/v1/jobs/{job_id}/result", headers=api.headers).status_code == 200
-    # Stage webhooks are sent again for the new attempt, each at most once.
-    assert api.notifier.events(job_id) == ["job.stage_changed"] * 8 + ["job.completed"]
+    if api.kind == "mock":  # Stage webhooks are sent again for the new attempt, each at most once.
+        assert api.notifier.events(job_id) == ["job.stage_changed"] * 8 + ["job.completed"]
 
 
 def test_retry_after_24_hours_is_rejected(api):
     job_id = api.create_id({"external_ref": "mock-fail-3"})
-    api.run_to_end()
+    api.fail(job_id)
     api.clock.advance(24 * 3600 + 1)
     assert_error(api.client.post(f"/v1/jobs/{job_id}/retry", headers=api.headers), 409, "job_not_retryable")
 
@@ -193,14 +193,14 @@ def test_retry_after_24_hours_is_rejected(api):
 def test_retry_of_not_failed_job_is_rejected(api):
     job_id = api.create_id()
     assert_error(api.client.post(f"/v1/jobs/{job_id}/retry", headers=api.headers), 409, "job_not_retryable")
-    api.run_to_end()
+    api.finish(job_id)
     assert_error(api.client.post(f"/v1/jobs/{job_id}/retry", headers=api.headers), 409, "job_not_retryable")
 
 
 def test_retry_respects_active_limit(api_factory):
     api = api_factory(max_active_jobs=1)
     failed = api.create_id({"external_ref": "mock-fail-4"})
-    api.run_to_end()
+    api.fail(failed)
     api.create_id({"external_ref": "gen-busy"})
     error = assert_error(api.client.post(f"/v1/jobs/{failed}/retry", headers=api.headers), 429, "too_many_jobs")
     assert error["details"] == {"max_active_jobs": 1}
