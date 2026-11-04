@@ -40,6 +40,8 @@ def test_defaults(clean_env):
     assert s.embed_model == "gemini-embedding-001"
     assert s.llm_base_url is None and s.embed_base_url is None
     assert s.llm_max_concurrency == 4
+    # Step 6: retries, timeout, embedding batch (former generate_with_retry / embed_batch values)
+    assert (s.llm_retries, s.llm_retry_delay_s, s.llm_timeout_s, s.embed_max_batch) == (5, 3.0, 120, 100)
     # Thresholds and filters
     assert s.cluster_sim_threshold == 0.82
     assert s.cluster_require_source_overlap is False
@@ -191,3 +193,20 @@ def test_no_removed_threshold_constants_in_qgen():
     )
     offenders = [(rel, m.group(0)) for rel, text in _python_sources() for m in removed.finditer(text)]
     assert offenders == []
+
+
+def test_llm_retry_settings_from_env(clean_env):
+    clean_env.setenv("QGEN_LLM_RETRIES", "2")
+    clean_env.setenv("QGEN_LLM_RETRY_DELAY_S", "0.5")
+    clean_env.setenv("QGEN_LLM_TIMEOUT_S", "30")
+    clean_env.setenv("QGEN_EMBED_MAX_BATCH", "50")
+    s = Settings(_env_file=None)
+    assert (s.llm_retries, s.llm_retry_delay_s, s.llm_timeout_s, s.embed_max_batch) == (2, 0.5, 30, 50)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, llm_retries=0)
+
+
+def test_setting_or_default_uses_given_settings(clean_env):
+    s = Settings.model_construct(lo_batch_size=7)
+    assert setting_or_default(None, "lo_batch_size", s) == 7
+    assert setting_or_default(3, "lo_batch_size", s) == 3

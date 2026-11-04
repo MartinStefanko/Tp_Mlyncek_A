@@ -1,67 +1,34 @@
-"""Recording wrapper around the LLM client used by the pipeline in qgen/.
+"""Recording wrapper around the LLM interface used by the pipeline in qgen/.
 
-Exposes the subset of the `genai.Client` interface that the pipeline uses
-(`client.models.generate_content`, `client.models.embed_content`), delegates
-every call to the real client and appends one JSON line per call to a JSONL file.
+`RecordingClient` implements `qgen.llm.base.LLMClient` and `EmbeddingClient`, delegates
+every call to the real clients (from qgen.llm.factory) and appends one JSON line per call
+to a JSONL file. Since step 6 it wraps the interface, not `genai.Client`; the file format
+is unchanged, so old recordings stay valid for tests/replay_client.py.
 
 Each record contains:
-    seq, method, model, contents (input), config, duration_s,
-    and either `output` ({"text": ...} or {"embeddings": [[...], ...]})
-    or `error` ({"type": ..., "message": ...}) when the call raised.
+    seq, method ("generate_content" | "embed_content"), model, contents (input),
+    duration_s, and either `output` ({"text": ...} or {"embeddings": [[...], ...]}, plus
+    `usage` when the provider returned token counts) or `error` ({"type", "message"})
+    when the call raised.
 
-Failed calls are recorded too (and re-raised), so a replay client can
-reproduce retry behaviour in `generate_with_retry`.
+Failed calls are recorded too (and re-raised), so a replay client can reproduce the
+retries of qgen.llm.retry.
 
-This module does not import any LLM vendor library; the real client is injected.
+This module does not import any LLM vendor library; the real clients are injected.
 """
 
 import json
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-
-def _to_jsonable(value: Any) -> Any:
-    """Best-effort conversion of call arguments to JSON-serializable data."""
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, (list, tuple)):
-        return [_to_jsonable(v) for v in value]
-    if isinstance(value, dict):
-        return {str(k): _to_jsonable(v) for k, v in value.items()}
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        try:
-            return model_dump(mode="json", exclude_none=True)
-        except Exception:
-            pass
-    return repr(value)
-
-
-def _extract_text(response: Any) -> Any:
-    try:
-        return response.text
-    except Exception as exc:  # .text may raise on blocked / empty candidates
-        return {"text_error": f"{type(exc).__name__}: {exc}"}
-
-
-def _extract_vectors(response: Any) -> list:
-    embeddings = getattr(response, "embeddings", None)
-    if embeddings is None:
-        single = getattr(response, "embedding", None)
-        embeddings = [single] if single is not None else []
-    vectors = []
-    for emb in embeddings:
-        values = getattr(emb, "values", None)
-        if values is None and isinstance(emb, dict):
-            values = emb.get("values")
-        vectors.append(list(values) if values is not None else None)
-    return vectors
+GENERATE = "generate_content"
+EMBED = "embed_content"
 
 
 class CallRecorder:
-    """Thread-safe JSONL writer shared by the wrapper objects."""
+    """Thread-safe JSONL writer."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -89,69 +56,58 @@ class CallRecorder:
                 self._file.close()
 
 
-class RecordingModels:
-    def __init__(self, real_models: Any, recorder: CallRecorder):
-        self._real = real_models
-        self._recorder = recorder
+class RecordingClient:
+    """LLMClient + EmbeddingClient that records every call of the wrapped clients."""
 
-    def _call(self, method: str, extract, model: str, contents: Any, config: Any, kwargs: dict):
-        record = {
-            "method": method,
-            "model": model,
-            "contents": _to_jsonable(contents),
-        }
-        if config is not None:
-            record["config"] = _to_jsonable(config)
-        if kwargs:
-            record["kwargs"] = _to_jsonable(kwargs)
+    def __init__(self, llm: Any, embedder: Any, jsonl_path: str | Path):
+        self._llm = llm
+        self._embedder = embedder
+        self.recorder = CallRecorder(jsonl_path)
 
-        real_method = getattr(self._real, method)
-        call_kwargs = dict(kwargs)
-        if config is not None:
-            call_kwargs["config"] = config
-
+    def _record(self, method: str, model: str, contents: Any, call, extract):
+        record = {"method": method, "model": model, "contents": contents}
         started = time.perf_counter()
         try:
-            response = real_method(model=model, contents=contents, **call_kwargs)
+            result = call()
         except Exception as exc:
             record["duration_s"] = round(time.perf_counter() - started, 4)
             record["error"] = {"type": type(exc).__name__, "message": str(exc)}
-            self._recorder.write(record)
+            self.recorder.write(record)
             raise
         record["duration_s"] = round(time.perf_counter() - started, 4)
-        record["output"] = extract(response)
-        self._recorder.write(record)
-        return response
+        record.update(extract(result))
+        self.recorder.write(record)
+        return result
 
-    def generate_content(self, *, model: str, contents: Any, config: Any = None, **kwargs):
-        return self._call(
-            "generate_content",
-            lambda r: {"text": _extract_text(r)},
-            model, contents, config, kwargs,
+    def generate(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        json_mode: bool = True,
+        temperature: float = 0.2,
+        max_tokens: Optional[int] = None,
+    ):
+        def extract(response):
+            data = {"output": {"text": response.text}}
+            if response.usage:
+                data["usage"] = dict(response.usage)
+            return data
+
+        return self._record(
+            GENERATE, model, prompt,
+            lambda: self._llm.generate(
+                prompt, model=model, json_mode=json_mode, temperature=temperature, max_tokens=max_tokens
+            ),
+            extract,
         )
 
-    def embed_content(self, *, model: str, contents: Any, config: Any = None, **kwargs):
-        return self._call(
-            "embed_content",
-            lambda r: {"embeddings": _extract_vectors(r)},
-            model, contents, config, kwargs,
+    def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
+        return self._record(
+            EMBED, model, list(texts),
+            lambda: self._embedder.embed(texts, model=model),
+            lambda vectors: {"output": {"embeddings": [list(v) for v in vectors]}},
         )
-
-    def __getattr__(self, name: str):
-        # Anything the pipeline does not use is passed through unrecorded.
-        return getattr(self._real, name)
-
-
-class RecordingClient:
-    """Drop-in replacement for `genai.Client` as far as the pipeline uses it."""
-
-    def __init__(self, real_client: Any, jsonl_path: str | Path):
-        self._real = real_client
-        self.recorder = CallRecorder(jsonl_path)
-        self.models = RecordingModels(real_client.models, self.recorder)
 
     def close(self) -> None:
         self.recorder.close()
-
-    def __getattr__(self, name: str):
-        return getattr(self._real, name)

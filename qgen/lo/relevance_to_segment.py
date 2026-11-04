@@ -5,14 +5,14 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from qgen.context_builder import build_context_for_lo, build_page_map
 from qgen.config import setting_or_default
-from qgen.llm.client import embed_batch, ensure_client
+from qgen.llm.retry import embed_texts
 from qgen.lo.clustering import normalize_list_field
 
 
 def analyze_lo_relevance_to_segment(
     segmenty,
     los,
-    client=None,
+    embedder=None,
     embedding_model: Optional[str] = None,
     verbose: bool = True,
     context_max_chars: Optional[int] = None,
@@ -57,18 +57,11 @@ def analyze_lo_relevance_to_segment(
     if not comparable_items:
         return report
 
-    client = ensure_client(client)
-
-    try:
-        lo_embeddings = embed_batch([item["lo_text"] for item in comparable_items], client, embedding_model)
-        source_embeddings = embed_batch([item["source_text"] for item in comparable_items], client, embedding_model)
-    except Exception as e:
-        if verbose:
-            print(f"Analyza LO vs zdrojovy segment zlyhala pri embeddingoch: {e}")
-        for item in report["items"]:
-            item.pop("lo_text", None)
-            item.pop("source_text", None)
-        return report
+    # Step 6: no `except Exception` returning an empty report; LLMError propagates.
+    lo_embeddings = embed_texts(embedder, [item["lo_text"] for item in comparable_items], model=embedding_model)
+    source_embeddings = embed_texts(
+        embedder, [item["source_text"] for item in comparable_items], model=embedding_model
+    )
 
     similarities = []
     for idx, item in enumerate(comparable_items):

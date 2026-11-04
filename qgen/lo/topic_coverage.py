@@ -3,17 +3,17 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-from qgen.llm.json_load import safe_load_json
 from qgen.context_builder import format_segment_label
 from qgen.config import setting_or_default
-from qgen.llm.client import embed_batch, ensure_client, generate_with_retry
+from qgen.llm.retry import embed_texts, generate_json
 from qgen.lo.clustering import normalize_list_field
 
 
 def analyze_topic_coverage(
     segmenty,
     los,
-    client=None,
+    llm=None,
+    embedder=None,
     topic_model: Optional[str] = None,
     embedding_model: Optional[str] = None,
     similarity_threshold: Optional[float] = None,
@@ -33,7 +33,7 @@ def analyze_topic_coverage(
     }
 
     topics = extract_document_topics(
-        segmenty, client=client, model=topic_model, verbose=verbose, source_max_chars=source_max_chars
+        segmenty, llm=llm, model=topic_model, verbose=verbose, source_max_chars=source_max_chars
     )
     report["topics"] = topics
     report["stats"]["topics_total"] = len(topics)
@@ -41,18 +41,12 @@ def analyze_topic_coverage(
     if not topics or not los:
         return report
 
-    client = ensure_client(client)
-
     topic_texts = [topic["tema"] for topic in topics]
     lo_texts = [lo_to_text(lo) for lo in los]
 
-    try:
-        topic_embeddings = embed_batch(topic_texts, client, embedding_model)
-        lo_embeddings = embed_batch(lo_texts, client, embedding_model)
-    except Exception as e:
-        if verbose:
-            print(f"Analyza pokrytia tem zlyhala pri embeddingoch: {e}")
-        return report
+    # Step 6: no `except Exception` returning the report without coverage; LLMError propagates.
+    topic_embeddings = embed_texts(embedder, topic_texts, model=embedding_model)
+    lo_embeddings = embed_texts(embedder, lo_texts, model=embedding_model)
 
     sim_matrix = cosine_similarity(np.array(topic_embeddings), np.array(lo_embeddings))
 
@@ -77,7 +71,7 @@ def analyze_topic_coverage(
 
 def extract_document_topics(
     segmenty,
-    client=None,
+    llm=None,
     model: Optional[str] = None,
     verbose: bool = True,
     source_max_chars: Optional[int] = None,
@@ -105,13 +99,8 @@ Materiál:
 \"\"\"{source_text}\"\"\"
 """
 
-    try:
-        response = generate_with_retry(prompt, client=client, model=model, verbose=verbose)
-        parsed = safe_load_json(response.text if response else "")
-    except Exception as e:
-        if verbose:
-            print(f"Extrakcia hlavnych tem zlyhala: {e}")
-        return []
+    # Step 6: no `except Exception: return []` (document without topics); LLMError propagates.
+    parsed = generate_json(llm, prompt, role="topics", model=model, verbose=verbose)
 
     if isinstance(parsed, dict):
         parsed = [parsed]

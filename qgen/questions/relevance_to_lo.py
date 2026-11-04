@@ -4,14 +4,14 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 from qgen.config import setting_or_default
-from qgen.llm.client import embed_batch, ensure_client
+from qgen.llm.retry import embed_texts
 from qgen.lo.clustering import normalize_list_field
 
 
 def analyze_item_relevance_to_lo(
     items,
     los,
-    client=None,
+    embedder=None,
     embedding_model: Optional[str] = None,
     verbose: bool = True,
 ):
@@ -59,18 +59,9 @@ def analyze_item_relevance_to_lo(
     if not comparable_items:
         return report
 
-    client = ensure_client(client)
-
-    try:
-        item_embeddings = embed_batch([row["item_text"] for row in comparable_items], client, embedding_model)
-        lo_embeddings = embed_batch([row["lo_text"] for row in comparable_items], client, embedding_model)
-    except Exception as e:
-        if verbose:
-            print(f"Analyza relevance polozky k LO zlyhala pri embeddingoch: {e}")
-        for row in report["items"]:
-            row.pop("item_text", None)
-            row.pop("lo_text", None)
-        return report
+    # Step 6: no `except Exception` returning an empty report; LLMError propagates.
+    item_embeddings = embed_texts(embedder, [row["item_text"] for row in comparable_items], model=embedding_model)
+    lo_embeddings = embed_texts(embedder, [row["lo_text"] for row in comparable_items], model=embedding_model)
 
     similarities = []
     for idx, row in enumerate(comparable_items):

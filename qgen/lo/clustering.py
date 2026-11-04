@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 from qgen.config import setting_or_default
-from qgen.llm.client import embed_batch, ensure_client
+from qgen.llm.retry import embed_texts
 
 # Only for the debug print of the most similar pairs; no effect on the result.
 DEBUG_FLOOR = 0.5
@@ -35,7 +35,7 @@ def normalize_sources(val) -> set:
 def cluster_by_core(
     lo_list: List[Dict[str, Any]],
     similarity_threshold: Optional[float] = None,
-    client: Optional[Any] = None,
+    embedder: Optional[Any] = None,
     embedding_model: Optional[str] = None,
     require_source_overlap: Optional[bool] = None,
 ):
@@ -45,8 +45,6 @@ def cluster_by_core(
     similarity_threshold = setting_or_default(similarity_threshold, "cluster_sim_threshold")
     embedding_model = setting_or_default(embedding_model, "embed_model")
     require_source_overlap = setting_or_default(require_source_overlap, "cluster_require_source_overlap")
-
-    client = ensure_client(client)
 
     bloom_groups: Dict[str, List[Dict[str, Any]]] = {}
     for obj in lo_list:
@@ -68,11 +66,8 @@ def cluster_by_core(
             ]
             texts.append(" ".join(text_parts))
 
-        try:
-            embeddings = embed_batch(texts, client, embedding_model)
-        except Exception as e:
-            print(f"[{bloom}] Zlyhalo získanie embeddingov: {e}")
-            return lo_list
+        # Step 6: no `except Exception: return lo_list` (unclustered LO); LLMError propagates.
+        embeddings = embed_texts(embedder, texts, model=embedding_model)
 
         sim_matrix = cosine_similarity(np.array(embeddings))
 

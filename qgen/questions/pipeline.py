@@ -17,8 +17,8 @@ from qgen.questions.answerability import analyze_item_answerability
 from qgen.questions.faithfulness import analyze_item_faithfulness
 from qgen.questions.relevance_to_lo import analyze_item_relevance_to_lo
 from qgen.questions.validation import validate_items
-from qgen.llm.json_load import safe_load_json
-from qgen.llm.client import generate_with_retry
+from qgen.llm.base import EmbeddingClient, LLMClient
+from qgen.llm.retry import generate_json
 from qgen.progress import (
     STAGE_Q_EVALUATION,
     STAGE_QUESTIONS,
@@ -51,7 +51,7 @@ def generate_items_for_batch(
     page_map,
     document_language="sk",
     model=None,
-    client=None,
+    llm=None,
     verbose=True,
     context_max_chars=None,
 ):
@@ -90,14 +90,9 @@ def generate_items_for_batch(
         document_language=document_language,
     )
 
-    try:
-        response = generate_with_retry(prompt, client=client, model=model, verbose=verbose)
-        parsed = safe_load_json(response.text if response else "")
-    except Exception as e:
-        ids = [b["id"] for b in lo_blocks]
-        if verbose:
-            print(f"Generovanie položiek pre batch LO {ids} zlyhalo: {e}")
-        return []
+    # Step 6: no `except Exception: return []` (the batch was retried and then left without
+    # questions); LLMError propagates.
+    parsed = generate_json(llm, prompt, role="questions", model=model, verbose=verbose)
 
     if isinstance(parsed, dict):
         parsed = [parsed]
@@ -114,7 +109,7 @@ def generate_items_for_batch(
     return items
 
 
-def evaluate_items_batch(items_batch, model=None, client=None, verbose=True, document_language="sk"):
+def evaluate_items_batch(items_batch, model=None, llm=None, verbose=True, document_language="sk"):
     if not items_batch:
         return {}
     model = setting_or_default(model, "llm_model_eval")
@@ -134,13 +129,9 @@ def evaluate_items_batch(items_batch, model=None, client=None, verbose=True, doc
 
     prompt = build_item_evaluation_prompt(items_text, document_language)
 
-    try:
-        response = generate_with_retry(prompt, client=client, model=model, verbose=verbose)
-        parsed = safe_load_json(response.text if response else "")
-    except Exception as e:
-        if verbose:
-            print(f"Hodnotenie batchu položiek zlyhalo: {e}")
-        return {}
+    # Step 6: no `except Exception: return {}` (the questions then had no score and were
+    # filtered out); LLMError propagates.
+    parsed = generate_json(llm, prompt, role="eval", model=model, verbose=verbose)
 
     if isinstance(parsed, dict):
         parsed = [parsed]
@@ -186,7 +177,8 @@ def generate_all_items(
     model=None,
     generation_model=None,
     evaluation_model=None,
-    client=None,
+    llm: Optional[LLMClient] = None,
+    embedder: Optional[EmbeddingClient] = None,
     verbose=True,
     max_batch_attempts=None,
     max_eval_attempts=None,
@@ -197,13 +189,15 @@ def generate_all_items(
     """Question pipeline: language, generation and scoring per LO batch, evaluation, filter.
 
     document_language: None or "auto" = detect with the LLM; "sk" / "en" = use it.
-    Values not given come from `settings` (default: get_settings()).
+    Values not given (None) come from `settings` (default: get_settings()).
+    llm / embedder = None: created by qgen.llm.factory per role.
+    An LLM or embedding call that fails for good raises LLMError.
     """
     settings = settings or get_settings()
-    batch_size = batch_size or settings.question_batch_size
-    evaluation_batch_size = evaluation_batch_size or settings.question_eval_batch_size
-    max_batch_attempts = max_batch_attempts or settings.question_generation_attempts
-    max_eval_attempts = max_eval_attempts or settings.question_eval_attempts
+    batch_size = setting_or_default(batch_size, "question_batch_size", settings)
+    evaluation_batch_size = setting_or_default(evaluation_batch_size, "question_eval_batch_size", settings)
+    max_batch_attempts = setting_or_default(max_batch_attempts, "question_generation_attempts", settings)
+    max_eval_attempts = setting_or_default(max_eval_attempts, "question_eval_attempts", settings)
     generation_model = generation_model or model or settings.llm_model_questions
     evaluation_model = evaluation_model or model or settings.llm_model_eval
 
@@ -214,11 +208,12 @@ def generate_all_items(
     language_info = resolve_document_language(
         segmenty,
         document_language,
-        client=client,
+        llm=llm,
         model=generation_model,
         settings=settings,
         verbose=verbose,
         progress_callback=progress_callback,
+        role="questions",
     )
     document_language = language_info.get("language", "sk")
     lo_order = {lo.get("id"): idx for idx, lo in enumerate(los)}
@@ -249,7 +244,7 @@ def generate_all_items(
                 page_map,
                 document_language=document_language,
                 model=generation_model,
-                client=client,
+                llm=llm,
                 verbose=verbose,
                 context_max_chars=settings.context_max_chars,
             )
@@ -288,7 +283,7 @@ def generate_all_items(
                 batch_eval = evaluate_items_batch(
                     created_batch_items,
                     model=evaluation_model,
-                    client=client,
+                    llm=llm,
                     verbose=verbose,
                     document_language=document_language,
                 )
@@ -341,7 +336,7 @@ def generate_all_items(
     item_relevance_report = analyze_item_relevance_to_lo(
         all_items,
         los,
-        client=client,
+        embedder=embedder,
         embedding_model=settings.embed_model,
         verbose=verbose,
     )
@@ -350,7 +345,7 @@ def generate_all_items(
     item_faithfulness_report = analyze_item_faithfulness(
         segmenty,
         all_items,
-        client=client,
+        llm=llm,
         model=settings.llm_model,
         verbose=verbose,
         batch_size=evaluation_batch_size,
@@ -364,7 +359,7 @@ def generate_all_items(
     item_answerability_report = analyze_item_answerability(
         segmenty,
         all_items,
-        client=client,
+        llm=llm,
         model=settings.llm_model,
         verbose=verbose,
         batch_size=evaluation_batch_size,

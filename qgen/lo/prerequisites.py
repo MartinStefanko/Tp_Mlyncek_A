@@ -1,10 +1,9 @@
 from qgen.context_builder import parse_source_refs
-from qgen.llm.json_load import safe_load_json
 from qgen.config import setting_or_default
-from qgen.llm.client import generate_with_retry
+from qgen.llm.retry import generate_json
 
 
-def infer_prerequisites(lo_list, model=None, client=None, verbose=True, document_language="sk"):
+def infer_prerequisites(lo_list, model=None, llm=None, verbose=True, document_language="sk"):
     model = setting_or_default(model, "llm_model_lo")
     if not lo_list:
         return lo_list
@@ -26,7 +25,7 @@ def infer_prerequisites(lo_list, model=None, client=None, verbose=True, document
             group,
             signature=signature,
             model=model,
-            client=client,
+            llm=llm,
             verbose=verbose,
             document_language=document_language,
         )
@@ -47,7 +46,7 @@ def infer_prerequisites(lo_list, model=None, client=None, verbose=True, document
     return lo_list
 
 
-def infer_prerequisites_for_group(group, signature, model=None, client=None, verbose=True, document_language="sk"):
+def infer_prerequisites_for_group(group, signature, model=None, llm=None, verbose=True, document_language="sk"):
     model = setting_or_default(model, "llm_model_lo")
     summary_lines = []
     for obj in group:
@@ -87,15 +86,11 @@ Pouzivaj iba id zo zoznamu cielov, ktore su uvedene nizsie.
 Zoznam cielov:
 {summary_text}
 """
-    try:
-        response = generate_with_retry(prompt, client=client, model=model, verbose=verbose)
-        parsed = safe_load_json(response.text if response else "")
-        if isinstance(parsed, dict):
-            parsed = [parsed]
-    except Exception as e:
-        if verbose:
-            print(f"Prerekvizity zlyhali pre skupinu {list(signature)}: {e}")
-        return {}
+    # Step 6: no `except Exception: return {}` (LO silently without prerequisites);
+    # LLMError propagates.
+    parsed = generate_json(llm, prompt, role="prereq", model=model, verbose=verbose)
+    if isinstance(parsed, dict):
+        parsed = [parsed]
 
     valid_ids = {obj.get("id") for obj in group}
     mapping = {}

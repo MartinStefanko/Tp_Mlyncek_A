@@ -1,14 +1,13 @@
 from qgen.context_builder import build_context_for_sources, build_page_map
-from qgen.llm.json_load import safe_load_json
 from qgen.config import setting_or_default
-from qgen.llm.client import generate_with_retry
+from qgen.llm.retry import generate_json
 from qgen.progress import STAGE_Q_EVALUATION, batch_count, report_progress
 
 
 def analyze_item_answerability(
     segmenty,
     items,
-    client=None,
+    llm=None,
     model=None,
     verbose: bool = True,
     batch_size=None,
@@ -71,7 +70,7 @@ def analyze_item_answerability(
         for attempt in range(1, max_batch_attempts + 1):
             evaluations = evaluate_item_answerability_batch(
                 batch,
-                client=client,
+                llm=llm,
                 model=model,
                 verbose=verbose,
                 document_language=document_language,
@@ -105,7 +104,7 @@ def analyze_item_answerability(
     return report
 
 
-def evaluate_item_answerability_batch(batch, client=None, model=None, verbose: bool = True, document_language: str = "sk"):
+def evaluate_item_answerability_batch(batch, llm=None, model=None, verbose: bool = True, document_language: str = "sk"):
     parts = []
     for item in batch:
         parts.append(
@@ -148,13 +147,9 @@ Vrat LEN validny JSON ako pole objektov:
 ]
 """
 
-    try:
-        response = generate_with_retry(prompt, client=client, model=model, verbose=verbose)
-        parsed = safe_load_json(response.text if response else "")
-    except Exception as e:
-        if verbose:
-            print(f"Answerability hodnotenie otazky zlyhalo: {e}")
-        return None
+    # Step 6: no `except Exception: return None` (the questions then lost their score and
+    # were filtered out); LLMError propagates.
+    parsed = generate_json(llm, prompt, role="check", model=model, verbose=verbose)
 
     if isinstance(parsed, dict):
         parsed = [parsed]

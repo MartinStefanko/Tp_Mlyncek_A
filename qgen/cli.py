@@ -20,7 +20,7 @@ from pathlib import Path
 
 from qgen.config import Settings, get_settings
 from qgen.extraction.text_extraction import OcrUnavailableError, pdfs_to_text
-from qgen.llm.client import get_client
+from qgen.llm.factory import get_embedder, get_llm
 from qgen.pipeline import PipelineResult, run_pipeline
 
 
@@ -472,8 +472,8 @@ def build_parser():
     return parser
 
 
-def main(argv=None, client=None, settings: Settings = None) -> int:
-    """`client` and `settings` are for tests (replay client, fixed settings)."""
+def main(argv=None, llm=None, embedder=None, settings: Settings = None) -> int:
+    """`llm`, `embedder` and `settings` are for tests (replay client, fixed settings)."""
     parser = build_parser()
     args = parser.parse_args(argv)
     settings = settings or get_settings()
@@ -483,8 +483,12 @@ def main(argv=None, client=None, settings: Settings = None) -> int:
         if not Path(p).is_file():
             parser.error(f"File not found: {p}")
 
-    if client is None:
-        client = get_client()
+    # Created before the extraction, so a missing key fails at once and not after OCR.
+    # One provider serves every role today (QGEN_LLM_PROVIDER).
+    if llm is None:
+        llm = get_llm("lo", settings)
+    if embedder is None:
+        embedder = get_embedder(settings)
 
     pdf_inputs = [{"path": p, "name": os.path.basename(p)} for p in pdf_paths]
     try:
@@ -495,7 +499,8 @@ def main(argv=None, client=None, settings: Settings = None) -> int:
 
     result = run_pipeline(
         segments,
-        client=client,
+        llm=llm,
+        embedder=embedder,
         language=args.language,
         progress_callback=print_progress,
         settings=settings,

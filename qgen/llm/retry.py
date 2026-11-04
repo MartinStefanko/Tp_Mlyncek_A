@@ -1,0 +1,175 @@
+"""Retries, waiting and JSON parsing over the LLM interface (replaces generate_with_retry).
+
+    generate_text  one prompt -> LLMResponse
+    generate_json  generate_text + safe_load_json; invalid JSON -> one more call
+    embed_texts    texts -> vectors, split into batches of QGEN_EMBED_MAX_BATCH
+
+Every call gets up to QGEN_LLM_RETRIES attempts (incl. the first). Which errors are retried
+is decided by qgen.llm.errors.is_retryable: HTTP 429, 408, 5xx, timeout and network errors.
+Waiting between attempts:
+    HTTP 429 with Retry-After  the provider's value
+    HTTP 429 without it        QGEN_LLM_RETRY_DELAY_S * 2 ** (attempt - 1)
+    other retried errors       QGEN_LLM_RETRY_DELAY_S
+The timeout of one call (QGEN_LLM_TIMEOUT_S) is set in the client by the adapter, which
+raises LLMTimeoutError; here it is one more failed attempt. No thread runs a call in the
+background, so two attempts of the same call never run at the same time.
+
+All calls go through one semaphore sized by QGEN_LLM_MAX_CONCURRENCY (Príloha B). The
+pipeline calls the LLM one after another today, so it changes nothing yet.
+
+On final failure the functions raise LLMError. The pipeline must not catch it.
+`llm` / `embedder` = None: the client comes from qgen.llm.factory for the role.
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+from typing import Any, Callable, Optional, TypeVar
+
+from qgen.config import Settings, get_settings
+from qgen.llm import factory
+from qgen.llm.base import EmbeddingClient, LLMClient, LLMResponse
+from qgen.llm.errors import LLMError, ProviderError, RateLimitError, is_retryable
+from qgen.llm.json_load import safe_load_json
+
+T = TypeVar("T")
+
+JSON_ATTEMPTS = 2  # first answer + one repeated call when the JSON is invalid
+
+# Replaced in tests, so retries do not really wait.
+_sleep: Callable[[float], None] = time.sleep
+
+_semaphore_lock = threading.Lock()
+_semaphore: Optional[threading.BoundedSemaphore] = None
+_semaphore_size = 0
+
+
+def _concurrency_limit(size: int) -> threading.BoundedSemaphore:
+    global _semaphore, _semaphore_size
+    with _semaphore_lock:
+        if _semaphore is None or _semaphore_size != size:
+            _semaphore = threading.BoundedSemaphore(size)
+            _semaphore_size = size
+        return _semaphore
+
+
+def _describe(error: BaseException) -> str:
+    """Short error text for logs. Only our own ProviderError messages are printed in full;
+    for other exceptions only the type, so no foreign text (possibly with the prompt) gets
+    into the log. The full exception stays in LLMError.cause."""
+    if isinstance(error, ProviderError):
+        return f"{type(error).__name__}: {error}"
+    return type(error).__name__
+
+
+def _wait_seconds(error: BaseException, attempt: int, settings: Settings) -> float:
+    delay = settings.llm_retry_delay_s
+    if isinstance(error, RateLimitError):
+        if error.retry_after is not None:
+            return max(0.0, float(error.retry_after))
+        return delay * (2 ** (attempt - 1))
+    return delay
+
+
+def _with_retry(call: Callable[[], T], *, role: str, model: str, settings: Settings, verbose: bool) -> T:
+    attempts = settings.llm_retries
+    limit = _concurrency_limit(settings.llm_max_concurrency)
+    for attempt in range(1, attempts + 1):
+        try:
+            with limit:
+                return call()
+        except Exception as error:
+            if not is_retryable(error):
+                raise LLMError(
+                    f"LLM call failed with an error that is not retried: {_describe(error)}",
+                    role=role, model=model, cause=error, attempts=attempt,
+                ) from error
+            if attempt == attempts:
+                raise LLMError(
+                    f"LLM call failed after all attempts: {_describe(error)}",
+                    role=role, model=model, cause=error, attempts=attempt,
+                ) from error
+            wait = _wait_seconds(error, attempt, settings)
+            if verbose:
+                print(f"LLM zlyhalo (pokus {attempt}/{attempts}), cakam {wait:g}s a opakujem. Chyba: {_describe(error)}")
+            _sleep(wait)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def generate_text(
+    llm: Optional[LLMClient],
+    prompt: str,
+    *,
+    role: str,
+    model: Optional[str] = None,
+    settings: Optional[Settings] = None,
+    verbose: bool = False,
+    json_mode: bool = True,
+) -> LLMResponse:
+    settings = settings or get_settings()
+    model = model or factory.model_for_role(role, settings)
+    client = llm if llm is not None else factory.get_llm(role, settings)
+    return _with_retry(
+        lambda: client.generate(prompt, model=model, json_mode=json_mode),
+        role=role, model=model, settings=settings, verbose=verbose,
+    )
+
+
+def generate_json(
+    llm: Optional[LLMClient],
+    prompt: str,
+    *,
+    role: str,
+    model: Optional[str] = None,
+    settings: Optional[Settings] = None,
+    verbose: bool = False,
+) -> Any:
+    """Parsed JSON answer. Invalid JSON twice in a row -> LLMError(invalid_json=True)."""
+    settings = settings or get_settings()
+    model = model or factory.model_for_role(role, settings)
+    last_error: Optional[json.JSONDecodeError] = None
+    for attempt in range(1, JSON_ATTEMPTS + 1):
+        response = generate_text(llm, prompt, role=role, model=model, settings=settings, verbose=verbose)
+        try:
+            return safe_load_json(response.text or "")
+        except json.JSONDecodeError as error:
+            last_error = error
+            if verbose and attempt < JSON_ATTEMPTS:
+                print(f"LLM vratilo neplatny JSON (role {role}), opakujem volanie.")
+    raise LLMError(
+        "LLM returned invalid JSON also after the repeated call",
+        role=role, model=model, cause=last_error, invalid_json=True, attempts=JSON_ATTEMPTS,
+    )
+
+
+def embed_texts(
+    embedder: Optional[EmbeddingClient],
+    texts: list[str],
+    *,
+    model: Optional[str] = None,
+    settings: Optional[Settings] = None,
+    verbose: bool = False,
+) -> list[list[float]]:
+    """Vectors for `texts`, in order. One embedding call per QGEN_EMBED_MAX_BATCH texts."""
+    if not texts:
+        return []
+    settings = settings or get_settings()
+    model = model or settings.embed_model
+    client = embedder if embedder is not None else factory.get_embedder(settings)
+    batch = settings.embed_max_batch
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), batch):
+        chunk = list(texts[start:start + batch])
+        chunk_vectors = _with_retry(
+            lambda: client.embed(chunk, model=model),
+            role=factory.EMBED_ROLE, model=model, settings=settings, verbose=verbose,
+        )
+        if len(chunk_vectors) != len(chunk):
+            raise LLMError(
+                "Number of embeddings does not match the number of inputs",
+                role=factory.EMBED_ROLE, model=model, attempts=1,
+            )
+        vectors.extend(list(v) for v in chunk_vectors)
+    return vectors

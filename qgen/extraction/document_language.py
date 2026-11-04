@@ -1,8 +1,7 @@
-from qgen.llm.json_load import safe_load_json
 from typing import Optional
 
 from qgen.config import Settings, setting_or_default
-from qgen.llm.client import generate_with_retry
+from qgen.llm.retry import generate_json
 from qgen.progress import STAGE_LANGUAGE, ProgressCallback, report_progress
 
 
@@ -10,7 +9,7 @@ SUPPORTED_DOCUMENT_LANGUAGES = {"sk", "en"}
 LANGUAGE_FROM_OPTION_REASON = "Language set by the 'language' option; detection skipped."
 
 
-def detect_document_language(segmenty, client=None, model=None, verbose=True, max_chars=None):
+def detect_document_language(segmenty, llm=None, model=None, verbose=True, max_chars=None, role="lo"):
     model = setting_or_default(model, "llm_model_lo")
     source_text = build_full_document_text(segmenty, max_chars=max_chars)
     if not source_text.strip():
@@ -35,13 +34,10 @@ Document:
 \"\"\"{source_text}\"\"\"
 """
 
-    try:
-        response = generate_with_retry(prompt, client=client, model=model, verbose=verbose)
-        parsed = safe_load_json(response.text if response else "")
-    except Exception as e:
-        if verbose:
-            print(f"Detekcia jazyka dokumentu zlyhala: {e}")
-        return heuristic_language_fallback(source_text, "Detekcia zlyhala, pouzity heuristicky fallback.")
+    # Step 6: no `except Exception` with the heuristic fallback any more. A failed call or
+    # invalid JSON raises LLMError, which must reach run_pipeline (job failed, llm_error).
+    # The heuristic stays only for a valid JSON answer with a wrong shape or language.
+    parsed = generate_json(llm, prompt, role=role, model=model, verbose=verbose)
 
     if not isinstance(parsed, dict):
         return heuristic_language_fallback(source_text, "Neplatna odpoved detekcie, pouzity heuristicky fallback.")
@@ -95,21 +91,23 @@ def build_full_document_text(segmenty, max_chars=None):
 def resolve_document_language(
     segmenty,
     document_language: Optional[str],
-    client,
+    llm,
     model: str,
     settings: Settings,
     verbose: bool,
     progress_callback: Optional[ProgressCallback],
+    role: str = "lo",
 ) -> dict:
     """Language of the document: from the option (sk/en) or detected by the LLM (None/auto)."""
     report_progress(progress_callback, STAGE_LANGUAGE, 0, 1)
     if document_language in (None, "auto"):
         language_info = detect_document_language(
             segmenty,
-            client=client,
+            llm=llm,
             model=model,
             verbose=verbose,
             max_chars=settings.language_sample_max_chars,
+            role=role,
         )
     elif document_language in SUPPORTED_DOCUMENT_LANGUAGES:
         language_info = {"language": document_language, "reason": LANGUAGE_FROM_OPTION_REASON}

@@ -62,7 +62,8 @@ def baseline_segments_extraction(monkeypatch):
 def test_cli_writes_results_and_reports(tmp_path, capsys, baseline_segments_extraction):
     require_baseline()
     out = tmp_path / "out"
-    code = cli.main([str(EKO_PDF), "--out", str(out)], client=replay_client(), settings=baseline_settings())
+    replay = replay_client()
+    code = cli.main([str(EKO_PDF), "--out", str(out)], llm=replay, embedder=replay, settings=baseline_settings())
     assert code == 0
 
     assert _read_json(out / "segments.json") == load_json("segments.json")
@@ -96,7 +97,7 @@ def test_cli_passes_ocr_and_language(tmp_path, monkeypatch, baseline_segments_ex
     with pytest.raises(SystemExit):
         cli.main(
             [str(EKO_PDF), "--out", str(tmp_path), "--ocr", "--language", "en"],
-            client=object(),
+            llm=object(), embedder=object(),
             settings=Settings.model_construct(),
         )
     assert baseline_segments_extraction[0]["ocr"] is True
@@ -105,16 +106,16 @@ def test_cli_passes_ocr_and_language(tmp_path, monkeypatch, baseline_segments_ex
 
 def test_cli_reports_missing_easyocr(tmp_path, monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "easyocr", None)
-    code = cli.main([str(EKO_PDF), "--out", str(tmp_path), "--ocr"], client=object(), settings=Settings.model_construct())
+    code = cli.main([str(EKO_PDF), "--out", str(tmp_path), "--ocr"], llm=object(), embedder=object(), settings=Settings.model_construct())
     assert code == 2
     assert "easyocr is not installed" in capsys.readouterr().err
 
 
 def test_cli_rejects_bad_arguments(tmp_path):
     with pytest.raises(SystemExit) as missing_file:
-        cli.main([str(tmp_path / "missing.pdf"), "--out", str(tmp_path)], client=object())
+        cli.main([str(tmp_path / "missing.pdf"), "--out", str(tmp_path)], llm=object(), embedder=object())
     assert missing_file.value.code == 2
     with pytest.raises(SystemExit):
-        cli.main([str(EKO_PDF), "--out", str(tmp_path), "--language", "de"], client=object())
+        cli.main([str(EKO_PDF), "--out", str(tmp_path), "--language", "de"], llm=object(), embedder=object())
     with pytest.raises(SystemExit):
-        cli.main([str(EKO_PDF)], client=object())  # --out is required
+        cli.main([str(EKO_PDF)], llm=object(), embedder=object())  # --out is required

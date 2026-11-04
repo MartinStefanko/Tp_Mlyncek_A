@@ -6,6 +6,7 @@ from typing import Any, Optional
 from qgen.config import Settings, get_settings, setting_or_default
 from qgen.context_builder import build_allowed_source_refs, build_source_name_map, parse_source_refs, resolve_source_names
 from qgen.extraction.document_language import resolve_document_language
+from qgen.llm.base import EmbeddingClient, LLMClient
 from qgen.lo.clustering import cluster_by_core
 from qgen.lo.faithfulness import analyze_lo_faithfulness
 from qgen.lo.generation import generate_learning_objects
@@ -58,14 +59,17 @@ def attach_source_names(los, source_name_map):
     return los
 
 
-def _lo_evaluation_reports(segmenty, los, client, verbose, settings, batch_size, document_language, progress_callback):
+def _lo_evaluation_reports(
+    segmenty, los, llm, embedder, verbose, settings, batch_size, document_language, progress_callback
+):
     """Topic coverage, relevance and faithfulness of the LO (step lo_evaluation)."""
     total = 2 + batch_count(len(los), batch_size)
     report_progress(progress_callback, STAGE_LO_EVALUATION, 0, total)
     coverage_report = analyze_topic_coverage(
         segmenty,
         los,
-        client=client,
+        llm=llm,
+        embedder=embedder,
         topic_model=settings.llm_model,
         embedding_model=settings.embed_model,
         similarity_threshold=settings.topic_match_threshold,
@@ -76,7 +80,7 @@ def _lo_evaluation_reports(segmenty, los, client, verbose, settings, batch_size,
     relevance_report = analyze_lo_relevance_to_segment(
         segmenty,
         los,
-        client=client,
+        embedder=embedder,
         embedding_model=settings.embed_model,
         verbose=verbose,
         context_max_chars=settings.context_max_chars,
@@ -86,7 +90,7 @@ def _lo_evaluation_reports(segmenty, los, client, verbose, settings, batch_size,
     faithfulness_report = analyze_lo_faithfulness(
         segmenty,
         los,
-        client=client,
+        llm=llm,
         model=settings.llm_model,
         verbose=verbose,
         batch_size=batch_size,
@@ -106,7 +110,8 @@ def generate_lo_pipeline(
     model=None,
     generation_model=None,
     prerequisites_model=None,
-    client=None,
+    llm: Optional[LLMClient] = None,
+    embedder: Optional[EmbeddingClient] = None,
     verbose=True,
     document_language=None,
     progress_callback: Optional[ProgressCallback] = None,
@@ -115,17 +120,19 @@ def generate_lo_pipeline(
     """LO pipeline: language, LO generation, clustering, prerequisites, evaluation, filter.
 
     document_language: None or "auto" = detect with the LLM; "sk" / "en" = use it.
-    Values not given come from `settings` (default: get_settings()).
+    Values not given (None) come from `settings` (default: get_settings()).
+    llm / embedder = None: created by qgen.llm.factory per role.
+    An LLM or embedding call that fails for good raises LLMError.
     """
     settings = settings or get_settings()
-    batch_size = batch_size or settings.lo_batch_size
+    batch_size = setting_or_default(batch_size, "lo_batch_size", settings)
     generation_model = generation_model or model or settings.llm_model_lo
     prerequisites_model = prerequisites_model or model or settings.llm_model_lo
     source_name_map = build_source_name_map(segmenty)
     language_info = resolve_document_language(
         segmenty,
         document_language,
-        client=client,
+        llm=llm,
         model=generation_model,
         settings=settings,
         verbose=verbose,
@@ -141,7 +148,7 @@ def generate_lo_pipeline(
         segmenty,
         batch_size=batch_size,
         model=generation_model,
-        client=client,
+        llm=llm,
         verbose=verbose,
         document_language=document_language,
         progress_callback=SubProgress(progress_callback, after=2),
@@ -162,7 +169,7 @@ def generate_lo_pipeline(
         report_progress(progress_callback, STAGE_LEARNING_OBJECTS, lo_steps_total, lo_steps_total)
         empty_report = validate_learning_objects([], allowed_pages=[])
         empty_coverage_report, empty_relevance_report, empty_faithfulness_report = _lo_evaluation_reports(
-            segmenty, [], client, verbose, settings, batch_size, document_language, progress_callback
+            segmenty, [], llm, embedder, verbose, settings, batch_size, document_language, progress_callback
         )
         return LOPipelineResult(
             learning_objects=[],
@@ -183,7 +190,7 @@ def generate_lo_pipeline(
     los = cluster_by_core(
         los,
         similarity_threshold=settings.cluster_sim_threshold,
-        client=client,
+        embedder=embedder,
         embedding_model=settings.embed_model,
         require_source_overlap=settings.cluster_require_source_overlap,
     )
@@ -195,7 +202,7 @@ def generate_lo_pipeline(
     los = infer_prerequisites(
         los,
         model=prerequisites_model,
-        client=client,
+        llm=llm,
         verbose=verbose,
         document_language=document_language,
     )
@@ -207,7 +214,7 @@ def generate_lo_pipeline(
     evaluation_start = time.perf_counter()
     validation_report = validate_learning_objects(los, allowed_pages=allowed_pages)
     coverage_report, relevance_report, faithfulness_report = _lo_evaluation_reports(
-        segmenty, los, client, verbose, settings, batch_size, document_language, progress_callback
+        segmenty, los, llm, embedder, verbose, settings, batch_size, document_language, progress_callback
     )
     accepted_los = filter_learning_objects_variant_b(
         los,

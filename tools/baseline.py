@@ -3,7 +3,7 @@
 Repeats exactly what the former app.py did on "Spustiť extrakciu textu":
     pdfs_to_text -> generate_lo_pipeline -> generate_all_items
 with the same models and parameters (OCR on, as app.py always did), but passes a
-RecordingClient through the existing `client` parameter so every LLM / embedding call
+RecordingClient as `llm` and `embedder` (step 6: the LLM interface) so every LLM / embedding call
 is stored in JSONL. The pipeline returns its reports; this tool writes them (with the
 writers in qgen/cli.py).
 
@@ -32,7 +32,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import qgen.llm.client as llm_client  # noqa: E402
+import qgen.llm.factory as llm_factory  # noqa: E402
 from qgen.cli import save_learning_objects_json, save_questions_json, write_reports  # noqa: E402
 from qgen.config import Settings  # noqa: E402
 from qgen.extraction.text_extraction import pdfs_to_text  # noqa: E402
@@ -53,10 +53,10 @@ class UnexpectedClientCreation(RuntimeError):
     pass
 
 
-def install_client_guard() -> tuple:
-    """Fail loudly if any module builds its own client instead of using the injected one."""
-    genai_module = llm_client.genai  # the vendor module, reached without importing it here
-    original = genai_module.Client
+def install_client_guard() -> dict:
+    """Fail loudly if any module asks the factory for its own client instead of using the
+    injected recording client. Returns the original factory functions."""
+    original = {"get_llm": llm_factory.get_llm, "get_embedder": llm_factory.get_embedder}
 
     def guarded(*args, **kwargs):
         raise UnexpectedClientCreation(
@@ -64,8 +64,9 @@ def install_client_guard() -> tuple:
             "the recording client would be bypassed."
         )
 
-    genai_module.Client = guarded
-    return genai_module, original
+    llm_factory.get_llm = guarded
+    llm_factory.get_embedder = guarded
+    return original
 
 
 def stats_of(reports: dict, name: str) -> dict:
@@ -167,15 +168,14 @@ def main(argv=None) -> int:
     reports_dir = out_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    # Real client via the pipeline's own factory (loads GEMINI_API_KEY from .env).
-    real_client = llm_client.get_client()
-    client = RecordingClient(real_client, out_dir / "llm_calls.jsonl")
+    # Real clients via the pipeline's own factory (loads GEMINI_API_KEY from .env).
+    client = RecordingClient(llm_factory.get_llm("lo"), llm_factory.get_embedder(), out_dir / "llm_calls.jsonl")
 
     reports: dict = {}
     lo_report, item_report = None, None
     # Code defaults only (same values as the former app.py); .env must not change the baseline.
     settings = Settings.model_construct()
-    genai_module, original_client_cls = install_client_guard()
+    original_factory = install_client_guard()
 
     timings: dict = {}
     total_start = time.perf_counter()
@@ -196,7 +196,8 @@ def main(argv=None) -> int:
             batch_size=LO_BATCH_SIZE,
             generation_model=LO_GENERATION_MODEL,
             prerequisites_model=LO_PREREQ_MODEL,
-            client=client,
+            llm=client,
+            embedder=client,
             verbose=True,
             settings=settings,
         )
@@ -217,7 +218,8 @@ def main(argv=None) -> int:
                 evaluation_batch_size=ITEM_EVALUATION_BATCH_SIZE,
                 generation_model=ITEM_GENERATION_MODEL,
                 evaluation_model=ITEM_EVALUATION_MODEL,
-                client=client,
+                llm=client,
+                embedder=client,
                 verbose=True,
                 settings=settings,
             )
@@ -229,7 +231,8 @@ def main(argv=None) -> int:
         write_reports(reports, reports_dir)
         timings["total_wall"] = round(time.perf_counter() - total_start, 4)
     finally:
-        genai_module.Client = original_client_cls
+        llm_factory.get_llm = original_factory["get_llm"]
+        llm_factory.get_embedder = original_factory["get_embedder"]
         client.close()
 
     metrics = build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, timings, client.recorder)

@@ -1,9 +1,8 @@
 ﻿import time
 
 from qgen.context_builder import format_segment_label, make_source_ref
-from qgen.llm.json_load import safe_load_json
 from qgen.config import setting_or_default
-from qgen.llm.client import generate_with_retry
+from qgen.llm.retry import generate_json
 from qgen.progress import STAGE_LEARNING_OBJECTS, batch_count, report_progress
 
 
@@ -11,7 +10,7 @@ def generate_learning_objects(
     segmenty,
     batch_size=None,
     model=None,
-    client=None,
+    llm=None,
     verbose=True,
     document_language="sk",
     progress_callback=None,
@@ -38,15 +37,9 @@ def generate_learning_objects(
 
         prompt = build_lo_generation_prompt(combined_text, document_language)
 
-        response = generate_with_retry(prompt, client=client, model=model, verbose=verbose)
-        response_text = response.text if response else ""
-
-        try:
-            parsed_seg = safe_load_json(response_text)
-        except Exception as e:
-            if verbose:
-                print("Nepodarilo sa parsovať JSON odpoveď:", e)
-            continue
+        # Step 6: invalid JSON no longer skips the batch (`except Exception: continue`);
+        # generate_json repeats the call once and then raises LLMError.
+        parsed_seg = generate_json(llm, prompt, role="lo", model=model, verbose=verbose)
 
         if not parsed_seg:
             continue
@@ -95,15 +88,11 @@ def generate_learning_objects(
             lo_summary_text = "\n".join(lo_summary)
 
             prompt_missing = build_missing_sources_prompt(lo_summary_text, batch_text_with_pages, document_language)
-            try:
-                response_missing = generate_with_retry(prompt_missing, client=client, model=model, verbose=verbose)
-                parsed_missing = safe_load_json(response_missing.text if response_missing else "")
-                if isinstance(parsed_missing, dict):
-                    parsed_missing = [parsed_missing]
-            except Exception as e:
-                parsed_missing = []
-                if verbose:
-                    print(f"Doplnenie citovanych zdrojov zlyhalo: {e}")
+            # Step 6: a failed call no longer means "no sources filled" (parsed_missing = []);
+            # LLMError propagates.
+            parsed_missing = generate_json(llm, prompt_missing, role="lo", model=model, verbose=verbose)
+            if isinstance(parsed_missing, dict):
+                parsed_missing = [parsed_missing]
 
             src_map = {}
             if isinstance(parsed_missing, list):

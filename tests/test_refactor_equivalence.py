@@ -65,7 +65,8 @@ def replay_run():
         batch_size=models["lo_batch_size"],
         generation_model=models["lo_generation"],
         prerequisites_model=models["lo_prerequisites"],
-        client=client,
+        llm=client,
+        embedder=client,
         verbose=False,
         settings=settings,
     )
@@ -78,7 +79,8 @@ def replay_run():
             evaluation_batch_size=models["item_evaluation_batch_size"],
             generation_model=models["item_generation"],
             evaluation_model=models["item_evaluation"],
-            client=client,
+            llm=client,
+            embedder=client,
             verbose=False,
             settings=settings,
         )

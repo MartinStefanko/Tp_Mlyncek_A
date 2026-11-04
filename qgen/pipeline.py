@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from qgen.config import Settings, get_settings
+from qgen.llm.base import EmbeddingClient, LLMClient
 from qgen.lo.pipeline import LOPipelineResult, generate_lo_pipeline
 from qgen.progress import ProgressCallback
 from qgen.questions.pipeline import QuestionPipelineResult, generate_all_items
@@ -44,17 +45,25 @@ class PipelineResult:
 
 def run_pipeline(
     segments,
-    client=None,
+    llm: Optional[LLMClient] = None,
+    embedder: Optional[EmbeddingClient] = None,
     language: Optional[str] = None,
     progress_callback: Optional[ProgressCallback] = None,
     settings: Optional[Settings] = None,
     verbose: bool = False,
 ) -> PipelineResult:
-    """language: None / "auto" = detect (both pipelines detect, as today); "sk" / "en" = use it."""
+    """language: None / "auto" = detect (both pipelines detect, as today); "sk" / "en" = use it.
+
+    llm / embedder: the clients for all LLM / embedding calls; None = qgen.llm.factory.
+    Raises qgen.llm.errors.LLMError when an LLM or embedding call fails for good (after the
+    retries, or invalid JSON also after the repeated call). The pipeline never turns it into
+    an empty result; the service marks the job failed with code llm_error.
+    """
     settings = settings or get_settings()
     lo_result = generate_lo_pipeline(
         segments,
-        client=client,
+        llm=llm,
+        embedder=embedder,
         verbose=verbose,
         document_language=language,
         progress_callback=progress_callback,
@@ -66,7 +75,8 @@ def run_pipeline(
         question_result = generate_all_items(
             lo_result.learning_objects,
             segments,
-            client=client,
+            llm=llm,
+            embedder=embedder,
             verbose=verbose,
             document_language=language,
             progress_callback=progress_callback,

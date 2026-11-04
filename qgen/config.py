@@ -10,13 +10,14 @@ Model defaults are the models the code uses today (baseline: gemini-2.5-flash-li
 question scoring gemini-2.5-flash), not gemini-4-argon from the specification. A model
 change is a separate decision and needs a new baseline.
 
-Model roles:
-    QGEN_LLM_MODEL            checks: topic extraction, LO faithfulness, question
-                              faithfulness and answerability
-    QGEN_LLM_MODEL_LO         language detection in the LO pipeline, LO generation,
-                              prerequisites
-    QGEN_LLM_MODEL_QUESTIONS  language detection in the question pipeline, question generation
-    QGEN_LLM_MODEL_EVAL       question quality score (1–5)
+Model roles (role names of qgen.llm.factory in brackets):
+    QGEN_LLM_MODEL            checks: topic extraction [topics], LO faithfulness, question
+                              faithfulness and answerability [check]; lesson split [split]
+    QGEN_LLM_MODEL_LO         language detection in the LO pipeline, LO generation [lo],
+                              prerequisites [prereq]
+    QGEN_LLM_MODEL_QUESTIONS  language detection in the question pipeline, question
+                              generation [questions]
+    QGEN_LLM_MODEL_EVAL       question quality score (1–5) [eval]
 """
 
 from functools import lru_cache
@@ -58,11 +59,17 @@ class Settings(BaseSettings):
     llm_model_questions: str = Field(default="gemini-2.5-flash-lite", description="Question generation.")
     llm_model_eval: str = Field(default="gemini-2.5-flash", description="Question quality score.")
     llm_max_concurrency: int = Field(default=4, ge=1, description="Parallel LLM calls of one worker.")
+    llm_retries: int = Field(default=5, ge=1, description="Attempts of one LLM / embedding call (incl. the first).")
+    llm_retry_delay_s: float = Field(
+        default=3.0, ge=0, description="Wait between attempts; base of the exponential wait on HTTP 429."
+    )
+    llm_timeout_s: float = Field(default=120, gt=0, description="Client timeout of one LLM / embedding call.")
 
     # --- Embeddings ------------------------------------------------------------------
     embed_provider: EmbedProvider = "gemini"
     embed_base_url: Optional[str] = None
     embed_model: str = "gemini-embedding-001"
+    embed_max_batch: int = Field(default=100, ge=1, description="Texts per embedding call.")
 
     # --- Pipeline thresholds -----------------------------------------------------------
     cluster_sim_threshold: float = Field(default=0.82, ge=0, le=1, description="LO clustering (cosine).")
@@ -126,13 +133,16 @@ class Settings(BaseSettings):
         return OptionDefaults(ocr=self.ocr_enabled, lesson_minutes=self.default_lesson_minutes)
 
 
-def setting_or_default(value, name: str):
-    """`value`, or the setting `name` from get_settings() when value is None.
+def setting_or_default(value, name: str, settings: Optional["Settings"] = None):
+    """`value`, or the setting `name` when value is None.
 
-    The settings are read only when needed, so a caller that passes every value
-    (the pipelines pass them from their own Settings object) never touches the environment.
+    The setting comes from `settings` when given, else from get_settings(). The settings
+    are read only when needed, so a caller that passes every value never touches the
+    environment.
     """
-    return value if value is not None else getattr(get_settings(), name)
+    if value is not None:
+        return value
+    return getattr(settings if settings is not None else get_settings(), name)
 
 
 @lru_cache(maxsize=1)

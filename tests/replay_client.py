@@ -1,17 +1,21 @@
 """Replay client: answers LLM / embedding calls from a recording (JSONL) instead of an API.
 
-Reads the file written by ``tools/recording_client.py`` and exposes the same subset of the
-client interface that the pipeline uses (``client.models.generate_content`` and
-``client.models.embed_content``).
+Reads the file written by ``tools/recording_client.py``. ``ReplayClient`` implements both
+interfaces of the LLM layer (``qgen.llm.base.LLMClient`` and ``EmbeddingClient``), so a test
+passes the same object as ``llm`` and ``embedder``.
 
 A response is found by its key (method, model, sha256 of the input), not by call order.
-So a call that was removed from the pipeline (e.g. Python document classification) does
-not shift the other answers. When the same input was recorded more than once, the answers
-are returned in the recorded order. A call without a recorded answer raises
-``UnrecordedCallError`` with a preview of the prompt.
+The method names are the ones in the recording: ``generate_content`` for ``generate`` and
+``embed_content`` for ``embed``. So a call that was removed from the pipeline (e.g. Python
+document classification) does not shift the other answers. When the same input was
+recorded more than once, the answers are returned in the recorded order. A call without a
+recorded answer raises ``UnrecordedCallError`` with a preview of the prompt.
 
 Optional ``transforms`` change the recorded inputs before the key is computed. They let a
 test accept a deliberate, named change in a prompt (see ``tests/recording_transforms.py``).
+
+Recorded failures: an ``error`` record raises a retryable ``ProviderError`` (as a transient
+API error would); a ``text_error`` record (blocked / empty answer) gives text "".
 
 This module never calls a real API and imports no LLM vendor library.
 """
@@ -23,10 +27,14 @@ import json
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Optional
+
+from qgen.llm.base import LLMResponse
+from qgen.llm.errors import ProviderError
 
 PREVIEW_CHARS = 1500
+GENERATE = "generate_content"
+EMBED = "embed_content"
 
 
 def input_hash(contents: Any) -> str:
@@ -59,9 +67,9 @@ class RecordingTransform:
 class UnrecordedCallError(BaseException):
     """The pipeline made a call that has no (remaining) answer in the recording.
 
-    Derives from BaseException on purpose: generate_with_retry and the pipeline catch
-    ``Exception`` (retry with sleep, then fall back to an empty result). A missing recording
-    must stop the run at once and show the prompt, not be retried or hidden.
+    Derives from BaseException on purpose: the retry layer catches ``Exception``. A missing
+    recording must stop the run at once and show the prompt, not be retried or turned into
+    an LLMError.
     """
 
     def __init__(self, method: str, model: str, contents: Any, key_hash: str, reason: str):
@@ -74,45 +82,15 @@ class UnrecordedCallError(BaseException):
         )
 
 
-class _FailingText:
-    """Response whose ``.text`` raises, like a blocked / empty candidate in the real SDK."""
-
-    def __init__(self, message: str):
-        self._message = message
-
-    @property
-    def text(self):
-        raise ValueError(self._message)
-
-
-def _build_response(method: str, record: dict) -> Any:
+def _raise_recorded_error(record: dict) -> None:
     if "error" in record:
         err = record["error"]
-        raise RuntimeError(f"[replayed {err.get('type')}] {err.get('message')}")
-    output = record.get("output") or {}
-    if method == "generate_content":
-        text = output.get("text")
-        if isinstance(text, dict) and "text_error" in text:
-            return _FailingText(text["text_error"])
-        return SimpleNamespace(text=text)
-    if method == "embed_content":
-        vectors = output.get("embeddings") or []
-        return SimpleNamespace(embeddings=[SimpleNamespace(values=v) for v in vectors])
-    raise ValueError(f"Unsupported recorded method: {method}")
-
-
-class ReplayModels:
-    def __init__(self, client: "ReplayClient"):
-        self._client = client
-
-    def generate_content(self, *, model: str, contents: Any, config: Any = None, **kwargs):
-        return self._client._answer("generate_content", model, contents)
-
-    def embed_content(self, *, model: str, contents: Any, config: Any = None, **kwargs):
-        return self._client._answer("embed_content", model, contents)
+        raise ProviderError(f"[replayed {err.get('type')}] {err.get('message')}", retryable=True)
 
 
 class ReplayClient:
+    """LLMClient + EmbeddingClient over a recording."""
+
     def __init__(self, jsonl_path: str | Path, transforms: Iterable[RecordingTransform] = ()):
         self.transforms = list(transforms)
         self._queues: dict[tuple, deque] = defaultdict(deque)
@@ -127,7 +105,6 @@ class ReplayClient:
                 key = (record["method"], record["model"], input_hash(contents))
                 self._queues[key].append(record)
                 self._known_keys.add(key)
-        self.models = ReplayModels(self)
 
     def _transform(self, method: str, contents: Any) -> Any:
         for transform in self.transforms:
@@ -135,7 +112,7 @@ class ReplayClient:
             transform.hits += changes
         return contents
 
-    def _answer(self, method: str, model: str, contents: Any) -> Any:
+    def _next_record(self, method: str, model: str, contents: Any) -> dict:
         key = (method, model, input_hash(contents))
         queue = self._queues.get(key)
         if not queue:
@@ -147,7 +124,30 @@ class ReplayClient:
             raise UnrecordedCallError(method, model, contents, key[2], reason)
         record = queue.popleft()
         self.calls.append((method, model))
-        return _build_response(method, record)
+        return record
+
+    # --- LLMClient ---------------------------------------------------------------------
+    def generate(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        json_mode: bool = True,
+        temperature: float = 0.2,
+        max_tokens: Optional[int] = None,
+    ) -> LLMResponse:
+        record = self._next_record(GENERATE, model, prompt)
+        _raise_recorded_error(record)
+        text = (record.get("output") or {}).get("text")
+        if not isinstance(text, str):  # {"text_error": ...} or None: blocked / empty answer
+            text = ""
+        return LLMResponse(text=text, model=model, usage=dict(record.get("usage") or {}))
+
+    # --- EmbeddingClient ---------------------------------------------------------------
+    def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
+        record = self._next_record(EMBED, model, list(texts))
+        _raise_recorded_error(record)
+        return [list(v) for v in (record.get("output") or {}).get("embeddings") or []]
 
     def unused_records(self) -> list[dict]:
         """Recorded calls that the run never asked for, in recorded order."""

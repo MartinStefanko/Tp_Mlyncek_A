@@ -62,7 +62,8 @@ def replay_progress():
     client = replay_client()
     result = run_pipeline(
         load_json("segments.json"),
-        client=client,
+        llm=client,
+        embedder=client,
         progress_callback=recorder,
         settings=baseline_settings(),
     )
@@ -139,7 +140,7 @@ def test_language_option_skips_detection():
     info = resolve_document_language(
         [{"page": 1, "text": "text"}],
         "en",
-        client=None,  # a detection call would need a client
+        llm=None,  # a detection call would need an LLM
         model="unused",
         settings=Settings.model_construct(),
         verbose=False,
