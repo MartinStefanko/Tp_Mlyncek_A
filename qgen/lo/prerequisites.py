@@ -1,10 +1,10 @@
 from qgen.context_builder import parse_source_refs
-from qgen.config import setting_or_default
+from qgen.config import Settings, setting_or_default
 from qgen.llm.retry import generate_json
 
 
-def infer_prerequisites(lo_list, model=None, llm=None, verbose=True, document_language="sk"):
-    model = setting_or_default(model, "llm_model_lo")
+def infer_prerequisites(lo_list, model=None, llm=None, verbose=True, document_language="sk", *, settings: Settings):
+    model = setting_or_default(model, "llm_model_lo", settings)
     if not lo_list:
         return lo_list
 
@@ -28,6 +28,7 @@ def infer_prerequisites(lo_list, model=None, llm=None, verbose=True, document_la
             llm=llm,
             verbose=verbose,
             document_language=document_language,
+            settings=settings,
         )
         for obj in group:
             mapping[obj.get("id")] = group_mapping.get(obj.get("id"), [])
@@ -46,8 +47,10 @@ def infer_prerequisites(lo_list, model=None, llm=None, verbose=True, document_la
     return lo_list
 
 
-def infer_prerequisites_for_group(group, signature, model=None, llm=None, verbose=True, document_language="sk"):
-    model = setting_or_default(model, "llm_model_lo")
+def infer_prerequisites_for_group(
+    group, signature, model=None, llm=None, verbose=True, document_language="sk", *, settings: Settings
+):
+    model = setting_or_default(model, "llm_model_lo", settings)
     summary_lines = []
     for obj in group:
         acts = obj.get("odporúčané_aktivity", [])
@@ -88,7 +91,7 @@ Zoznam cielov:
 """
     # Step 6: no `except Exception: return {}` (LO silently without prerequisites);
     # LLMError propagates.
-    parsed = generate_json(llm, prompt, role="prereq", model=model, verbose=verbose)
+    parsed = generate_json(llm, prompt, role="prereq", model=model, verbose=verbose, settings=settings)
     if isinstance(parsed, dict):
         parsed = [parsed]
 

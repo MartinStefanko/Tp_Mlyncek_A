@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import qgen.llm.factory as llm_factory  # noqa: E402
 from qgen.cli import save_learning_objects_json, save_questions_json, write_reports  # noqa: E402
-from qgen.config import Settings  # noqa: E402
+from qgen.config import Settings, get_settings  # noqa: E402
 from qgen.extraction.text_extraction import pdfs_to_text  # noqa: E402
 from qgen.lo.pipeline import generate_lo_pipeline  # noqa: E402
 from qgen.questions.pipeline import generate_all_items  # noqa: E402
@@ -168,8 +168,11 @@ def main(argv=None) -> int:
     reports_dir = out_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    # Real clients via the pipeline's own factory (loads GEMINI_API_KEY from .env).
-    client = RecordingClient(llm_factory.get_llm("lo"), llm_factory.get_embedder(), out_dir / "llm_calls.jsonl")
+    # Real clients via the pipeline's own factory (provider and keys from .env / environment).
+    env_settings = get_settings()
+    client = RecordingClient(
+        llm_factory.get_llm("lo", env_settings), llm_factory.get_embedder(env_settings), out_dir / "llm_calls.jsonl"
+    )
 
     reports: dict = {}
     lo_report, item_report = None, None

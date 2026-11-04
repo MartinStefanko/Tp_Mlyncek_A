@@ -262,13 +262,15 @@ def test_role_models_match_the_former_models(settings):
         factory.model_for_role("unknown", settings)
 
 
-def test_factory_rejects_missing_key_and_later_providers():
+def test_factory_rejects_missing_key():
+    """Step 7: every provider exists; a missing key / base_url is a configuration error
+    (LLMConfigError, a ValueError). More in tests/test_llm_providers.py."""
     with pytest.raises(ValueError):
         factory.get_llm("lo", Settings.model_construct())
-    with pytest.raises(NotImplementedError):
-        factory.get_llm("lo", Settings.model_construct(llm_provider="openai_compatible"))
-    with pytest.raises(NotImplementedError):
-        factory.get_embedder(Settings.model_construct(embed_provider="openai_compatible"))
+    with pytest.raises(ValueError):
+        factory.get_llm("lo", Settings.model_construct(llm_provider="openai_compatible", llm_model="m"))
+    with pytest.raises(ValueError):
+        factory.get_embedder(Settings.model_construct(embed_provider="openai_compatible", embed_model="e"))
 
 
 def test_missing_llm_is_created_by_the_factory(settings, sleeps, monkeypatch):

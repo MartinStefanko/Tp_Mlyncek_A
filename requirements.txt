@@ -1,5 +1,7 @@
 python-dotenv
 google-genai
+openai
+anthropic
 pypdf
 torch
 torchvision

@@ -8,7 +8,7 @@ decides what to store.
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from qgen.config import Settings, get_settings
+from qgen.config import Settings
 from qgen.llm.base import EmbeddingClient, LLMClient
 from qgen.lo.pipeline import LOPipelineResult, generate_lo_pipeline
 from qgen.progress import ProgressCallback
@@ -49,7 +49,8 @@ def run_pipeline(
     embedder: Optional[EmbeddingClient] = None,
     language: Optional[str] = None,
     progress_callback: Optional[ProgressCallback] = None,
-    settings: Optional[Settings] = None,
+    *,
+    settings: Settings,
     verbose: bool = False,
 ) -> PipelineResult:
     """language: None / "auto" = detect (both pipelines detect, as today); "sk" / "en" = use it.
@@ -59,7 +60,6 @@ def run_pipeline(
     retries, or invalid JSON also after the repeated call). The pipeline never turns it into
     an empty result; the service marks the job failed with code llm_error.
     """
-    settings = settings or get_settings()
     lo_result = generate_lo_pipeline(
         segments,
         llm=llm,

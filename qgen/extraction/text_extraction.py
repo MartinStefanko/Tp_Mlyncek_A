@@ -6,7 +6,6 @@ import fitz
 import numpy as np
 from pypdf import PdfReader
 
-from qgen.config import get_settings
 from qgen.progress import STAGE_EXTRACT, report_progress
 
 ZNAKY = "ˇ´`^~˝˚’'"
@@ -102,9 +101,14 @@ def pdf_to_text(pdf_cesta: str, source_id=None, source_name=None, ocr=False, on_
 
 
 def pdfs_to_text(pdf_subory, ocr=None, progress_callback=None, settings=None):
-    """Extract pages of all PDFs. ocr=None means QGEN_OCR_ENABLED (default false)."""
+    """Extract pages of all PDFs. ocr=None means QGEN_OCR_ENABLED of `settings` (default false).
+
+    The caller passes `ocr` or its `settings`; this module does not read the configuration.
+    """
     if ocr is None:
-        ocr = (settings or get_settings()).ocr_enabled
+        if settings is None:
+            raise TypeError("pdfs_to_text needs `ocr` or `settings` (QGEN_OCR_ENABLED).")
+        ocr = settings.ocr_enabled
     if ocr:
         ensure_ocr_available()
 

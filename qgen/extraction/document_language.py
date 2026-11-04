@@ -9,8 +9,10 @@ SUPPORTED_DOCUMENT_LANGUAGES = {"sk", "en"}
 LANGUAGE_FROM_OPTION_REASON = "Language set by the 'language' option; detection skipped."
 
 
-def detect_document_language(segmenty, llm=None, model=None, verbose=True, max_chars=None, role="lo"):
-    model = setting_or_default(model, "llm_model_lo")
+def detect_document_language(
+    segmenty, llm=None, model=None, verbose=True, max_chars=None, role="lo", *, settings: Settings
+):
+    model = setting_or_default(model, "llm_model_lo", settings)
     source_text = build_full_document_text(segmenty, max_chars=max_chars)
     if not source_text.strip():
         return {"language": "sk", "reason": "Dokument nema text pre klasifikaciu."}
@@ -37,7 +39,7 @@ Document:
     # Step 6: no `except Exception` with the heuristic fallback any more. A failed call or
     # invalid JSON raises LLMError, which must reach run_pipeline (job failed, llm_error).
     # The heuristic stays only for a valid JSON answer with a wrong shape or language.
-    parsed = generate_json(llm, prompt, role=role, model=model, verbose=verbose)
+    parsed = generate_json(llm, prompt, role=role, model=model, verbose=verbose, settings=settings)
 
     if not isinstance(parsed, dict):
         return heuristic_language_fallback(source_text, "Neplatna odpoved detekcie, pouzity heuristicky fallback.")
@@ -108,6 +110,7 @@ def resolve_document_language(
             verbose=verbose,
             max_chars=settings.language_sample_max_chars,
             role=role,
+            settings=settings,
         )
     elif document_language in SUPPORTED_DOCUMENT_LANGUAGES:
         language_info = {"language": document_language, "reason": LANGUAGE_FROM_OPTION_REASON}

@@ -40,9 +40,28 @@ def replay_client() -> ReplayClient:
     return ReplayClient(BASELINE_DIR / "llm_calls.jsonl", transforms=step4_transforms())
 
 
+# Model of the checks (topics, faithfulness, answerability) in the baseline run. It is not in
+# metrics.json; the baseline used the former constants, all gemini-2.5-flash-lite.
+BASELINE_CHECK_MODEL = "gemini-2.5-flash-lite"
+
+
+def baseline_models() -> dict[str, str]:
+    """Every model of the baseline run, by Settings field. Passed explicitly, so the replay
+    does not depend on the code defaults or on the model inheritance (step 7)."""
+    models = json.loads((BASELINE_DIR / "metrics.json").read_text(encoding="utf-8"))["models"]
+    assert models["lo_generation"] == models["lo_prerequisites"]
+    return {
+        "llm_model": BASELINE_CHECK_MODEL,
+        "llm_model_lo": models["lo_generation"],
+        "llm_model_questions": models["item_generation"],
+        "llm_model_eval": models["item_evaluation"],
+    }
+
+
 def baseline_settings() -> Settings:
-    """Code defaults only; a local .env or QGEN_* variables must not change a replay run."""
-    return Settings.model_construct()
+    """Code defaults plus the baseline models; a local .env or QGEN_* variables must not
+    change a replay run."""
+    return Settings.model_construct(**baseline_models())
 
 
 def without_removed_fields(items):

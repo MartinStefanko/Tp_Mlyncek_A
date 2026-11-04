@@ -1,7 +1,7 @@
 ﻿import time
 
 from qgen.context_builder import format_segment_label, make_source_ref
-from qgen.config import setting_or_default
+from qgen.config import Settings, setting_or_default
 from qgen.llm.retry import generate_json
 from qgen.progress import STAGE_LEARNING_OBJECTS, batch_count, report_progress
 
@@ -14,9 +14,11 @@ def generate_learning_objects(
     verbose=True,
     document_language="sk",
     progress_callback=None,
+    *,
+    settings: Settings,
 ):
-    batch_size = setting_or_default(batch_size, "lo_batch_size")
-    model = setting_or_default(model, "llm_model_lo")
+    batch_size = setting_or_default(batch_size, "lo_batch_size", settings)
+    model = setting_or_default(model, "llm_model_lo", settings)
     total_batches = batch_count(len(segmenty), batch_size)
     vsetky_lo = []
     next_id = 1
@@ -39,7 +41,7 @@ def generate_learning_objects(
 
         # Step 6: invalid JSON no longer skips the batch (`except Exception: continue`);
         # generate_json repeats the call once and then raises LLMError.
-        parsed_seg = generate_json(llm, prompt, role="lo", model=model, verbose=verbose)
+        parsed_seg = generate_json(llm, prompt, role="lo", model=model, verbose=verbose, settings=settings)
 
         if not parsed_seg:
             continue
@@ -90,7 +92,7 @@ def generate_learning_objects(
             prompt_missing = build_missing_sources_prompt(lo_summary_text, batch_text_with_pages, document_language)
             # Step 6: a failed call no longer means "no sources filled" (parsed_missing = []);
             # LLMError propagates.
-            parsed_missing = generate_json(llm, prompt_missing, role="lo", model=model, verbose=verbose)
+            parsed_missing = generate_json(llm, prompt_missing, role="lo", model=model, verbose=verbose, settings=settings)
             if isinstance(parsed_missing, dict):
                 parsed_missing = [parsed_missing]
 

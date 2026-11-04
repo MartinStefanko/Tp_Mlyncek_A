@@ -63,6 +63,11 @@ class LLMError(Exception):
         self.attempts = attempts
 
 
+class LLMConfigError(ValueError):
+    """The LLM / embedding configuration cannot work (missing key or base_url, a Gemini model
+    with another provider, embeddings from Anthropic). Raised at start, before any call."""
+
+
 def is_retryable(error: BaseException) -> bool:
     if isinstance(error, ProviderError):
         return error.retryable

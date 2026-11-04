@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from qgen.config import Settings, get_settings, setting_or_default
+from qgen.config import Settings, setting_or_default
 from qgen.context_builder import (
     build_allowed_source_refs,
     build_page_map,
@@ -54,8 +54,10 @@ def generate_items_for_batch(
     llm=None,
     verbose=True,
     context_max_chars=None,
+    *,
+    settings: Settings,
 ):
-    model = setting_or_default(model, "llm_model_questions")
+    model = setting_or_default(model, "llm_model_questions", settings)
     lo_blocks = []
     for lo in los_batch:
         lo_id = lo.get("id")
@@ -92,7 +94,7 @@ def generate_items_for_batch(
 
     # Step 6: no `except Exception: return []` (the batch was retried and then left without
     # questions); LLMError propagates.
-    parsed = generate_json(llm, prompt, role="questions", model=model, verbose=verbose)
+    parsed = generate_json(llm, prompt, role="questions", model=model, verbose=verbose, settings=settings)
 
     if isinstance(parsed, dict):
         parsed = [parsed]
@@ -109,10 +111,10 @@ def generate_items_for_batch(
     return items
 
 
-def evaluate_items_batch(items_batch, model=None, llm=None, verbose=True, document_language="sk"):
+def evaluate_items_batch(items_batch, model=None, llm=None, verbose=True, document_language="sk", *, settings: Settings):
     if not items_batch:
         return {}
-    model = setting_or_default(model, "llm_model_eval")
+    model = setting_or_default(model, "llm_model_eval", settings)
 
     parts = []
     for item in items_batch:
@@ -131,7 +133,7 @@ def evaluate_items_batch(items_batch, model=None, llm=None, verbose=True, docume
 
     # Step 6: no `except Exception: return {}` (the questions then had no score and were
     # filtered out); LLMError propagates.
-    parsed = generate_json(llm, prompt, role="eval", model=model, verbose=verbose)
+    parsed = generate_json(llm, prompt, role="eval", model=model, verbose=verbose, settings=settings)
 
     if isinstance(parsed, dict):
         parsed = [parsed]
@@ -184,16 +186,16 @@ def generate_all_items(
     max_eval_attempts=None,
     document_language=None,
     progress_callback: Optional[ProgressCallback] = None,
-    settings: Optional[Settings] = None,
+    *,
+    settings: Settings,
 ) -> QuestionPipelineResult:
     """Question pipeline: language, generation and scoring per LO batch, evaluation, filter.
 
     document_language: None or "auto" = detect with the LLM; "sk" / "en" = use it.
-    Values not given (None) come from `settings` (default: get_settings()).
+    Values not given (None) come from `settings` (required; the caller's settings, no get_settings()).
     llm / embedder = None: created by qgen.llm.factory per role.
     An LLM or embedding call that fails for good raises LLMError.
     """
-    settings = settings or get_settings()
     batch_size = setting_or_default(batch_size, "question_batch_size", settings)
     evaluation_batch_size = setting_or_default(evaluation_batch_size, "question_eval_batch_size", settings)
     max_batch_attempts = setting_or_default(max_batch_attempts, "question_generation_attempts", settings)
@@ -247,6 +249,7 @@ def generate_all_items(
                 llm=llm,
                 verbose=verbose,
                 context_max_chars=settings.context_max_chars,
+                settings=settings,
             )
             if raw_items:
                 break
@@ -286,6 +289,7 @@ def generate_all_items(
                     llm=llm,
                     verbose=verbose,
                     document_language=document_language,
+                    settings=settings,
                 )
                 if batch_eval:
                     break
@@ -339,6 +343,7 @@ def generate_all_items(
         embedder=embedder,
         embedding_model=settings.embed_model,
         verbose=verbose,
+        settings=settings,
     )
     report_progress(progress_callback, STAGE_Q_EVALUATION, 1, 1 + 2 * expected_check_batches)
     faithfulness_progress = SubProgress(progress_callback, before=1, after=expected_check_batches)
@@ -354,6 +359,7 @@ def generate_all_items(
         context_max_chars=settings.context_max_chars,
         faithful_score=settings.question_faithful_score,
         progress_callback=faithfulness_progress,
+        settings=settings,
     )
     answerability_progress = SubProgress(progress_callback, before=1 + faithfulness_progress.sub_total)
     item_answerability_report = analyze_item_answerability(
@@ -368,6 +374,7 @@ def generate_all_items(
         context_max_chars=settings.context_max_chars,
         answerable_score=settings.question_answerable_score,
         progress_callback=answerability_progress,
+        settings=settings,
     )
     q_evaluation_done = 1 + faithfulness_progress.sub_total + answerability_progress.sub_total
     report_progress(progress_callback, STAGE_Q_EVALUATION, q_evaluation_done, q_evaluation_done)

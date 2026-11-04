@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 from qgen.context_builder import format_segment_label
-from qgen.config import setting_or_default
+from qgen.config import Settings, setting_or_default
 from qgen.llm.retry import embed_texts, generate_json
 from qgen.lo.clustering import normalize_list_field
 
@@ -19,9 +19,11 @@ def analyze_topic_coverage(
     similarity_threshold: Optional[float] = None,
     verbose: bool = True,
     source_max_chars: Optional[int] = None,
+    *,
+    settings: Settings,
 ):
-    embedding_model = setting_or_default(embedding_model, "embed_model")
-    similarity_threshold = setting_or_default(similarity_threshold, "topic_match_threshold")
+    embedding_model = setting_or_default(embedding_model, "embed_model", settings)
+    similarity_threshold = setting_or_default(similarity_threshold, "topic_match_threshold", settings)
     report = {
         "topics": [],
         "stats": {
@@ -33,7 +35,8 @@ def analyze_topic_coverage(
     }
 
     topics = extract_document_topics(
-        segmenty, llm=llm, model=topic_model, verbose=verbose, source_max_chars=source_max_chars
+        segmenty, llm=llm, model=topic_model, verbose=verbose, source_max_chars=source_max_chars,
+        settings=settings,
     )
     report["topics"] = topics
     report["stats"]["topics_total"] = len(topics)
@@ -45,8 +48,8 @@ def analyze_topic_coverage(
     lo_texts = [lo_to_text(lo) for lo in los]
 
     # Step 6: no `except Exception` returning the report without coverage; LLMError propagates.
-    topic_embeddings = embed_texts(embedder, topic_texts, model=embedding_model)
-    lo_embeddings = embed_texts(embedder, lo_texts, model=embedding_model)
+    topic_embeddings = embed_texts(embedder, topic_texts, model=embedding_model, settings=settings)
+    lo_embeddings = embed_texts(embedder, lo_texts, model=embedding_model, settings=settings)
 
     sim_matrix = cosine_similarity(np.array(topic_embeddings), np.array(lo_embeddings))
 
@@ -75,8 +78,10 @@ def extract_document_topics(
     model: Optional[str] = None,
     verbose: bool = True,
     source_max_chars: Optional[int] = None,
+    *,
+    settings: Settings,
 ):
-    model = setting_or_default(model, "llm_model")
+    model = setting_or_default(model, "llm_model", settings)
     source_text = build_topic_source_text(segmenty, max_chars=source_max_chars)
     if not source_text.strip():
         return []
@@ -100,7 +105,7 @@ Materiál:
 """
 
     # Step 6: no `except Exception: return []` (document without topics); LLMError propagates.
-    parsed = generate_json(llm, prompt, role="topics", model=model, verbose=verbose)
+    parsed = generate_json(llm, prompt, role="topics", model=model, verbose=verbose, settings=settings)
 
     if isinstance(parsed, dict):
         parsed = [parsed]

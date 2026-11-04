@@ -19,6 +19,7 @@ pipeline calls the LLM one after another today, so it changes nothing yet.
 
 On final failure the functions raise LLMError. The pipeline must not catch it.
 `llm` / `embedder` = None: the client comes from qgen.llm.factory for the role.
+`settings` is required: the Settings object the pipeline got (never get_settings() here).
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ import threading
 import time
 from typing import Any, Callable, Optional, TypeVar
 
-from qgen.config import Settings, get_settings
+from qgen.config import Settings
 from qgen.llm import factory
 from qgen.llm.base import EmbeddingClient, LLMClient, LLMResponse
 from qgen.llm.errors import LLMError, ProviderError, RateLimitError, is_retryable
@@ -53,6 +54,11 @@ def _concurrency_limit(size: int) -> threading.BoundedSemaphore:
             _semaphore = threading.BoundedSemaphore(size)
             _semaphore_size = size
         return _semaphore
+
+
+def _require_settings(settings: Any) -> None:
+    if settings is None:
+        raise TypeError("settings is required: pass the Settings object the pipeline got.")
 
 
 def _describe(error: BaseException) -> str:
@@ -103,12 +109,12 @@ def generate_text(
     prompt: str,
     *,
     role: str,
+    settings: Settings,
     model: Optional[str] = None,
-    settings: Optional[Settings] = None,
     verbose: bool = False,
     json_mode: bool = True,
 ) -> LLMResponse:
-    settings = settings or get_settings()
+    _require_settings(settings)
     model = model or factory.model_for_role(role, settings)
     client = llm if llm is not None else factory.get_llm(role, settings)
     return _with_retry(
@@ -122,12 +128,12 @@ def generate_json(
     prompt: str,
     *,
     role: str,
+    settings: Settings,
     model: Optional[str] = None,
-    settings: Optional[Settings] = None,
     verbose: bool = False,
 ) -> Any:
     """Parsed JSON answer. Invalid JSON twice in a row -> LLMError(invalid_json=True)."""
-    settings = settings or get_settings()
+    _require_settings(settings)
     model = model or factory.model_for_role(role, settings)
     last_error: Optional[json.JSONDecodeError] = None
     for attempt in range(1, JSON_ATTEMPTS + 1):
@@ -148,14 +154,14 @@ def embed_texts(
     embedder: Optional[EmbeddingClient],
     texts: list[str],
     *,
+    settings: Settings,
     model: Optional[str] = None,
-    settings: Optional[Settings] = None,
     verbose: bool = False,
 ) -> list[list[float]]:
     """Vectors for `texts`, in order. One embedding call per QGEN_EMBED_MAX_BATCH texts."""
+    _require_settings(settings)
     if not texts:
         return []
-    settings = settings or get_settings()
     model = model or settings.embed_model
     client = embedder if embedder is not None else factory.get_embedder(settings)
     batch = settings.embed_max_batch

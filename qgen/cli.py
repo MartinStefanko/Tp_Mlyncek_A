@@ -20,7 +20,8 @@ from pathlib import Path
 
 from qgen.config import Settings, get_settings
 from qgen.extraction.text_extraction import OcrUnavailableError, pdfs_to_text
-from qgen.llm.factory import get_embedder, get_llm
+from qgen.llm.errors import LLMConfigError
+from qgen.llm.factory import check_config, get_embedder, get_llm
 from qgen.pipeline import PipelineResult, run_pipeline
 
 
@@ -483,8 +484,14 @@ def main(argv=None, llm=None, embedder=None, settings: Settings = None) -> int:
         if not Path(p).is_file():
             parser.error(f"File not found: {p}")
 
-    # Created before the extraction, so a missing key fails at once and not after OCR.
-    # One provider serves every role today (QGEN_LLM_PROVIDER).
+    # Checked before the extraction, so a missing key or base_url fails at once and not
+    # after OCR. One LLM client serves every role (QGEN_LLM_PROVIDER); the embedder has its
+    # own provider (QGEN_EMBED_PROVIDER).
+    try:
+        check_config(settings, llm=llm is None, embedder=embedder is None)
+    except LLMConfigError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
     if llm is None:
         llm = get_llm("lo", settings)
     if embedder is None:

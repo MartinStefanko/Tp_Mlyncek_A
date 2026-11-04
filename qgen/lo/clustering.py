@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-from qgen.config import setting_or_default
+from qgen.config import Settings, setting_or_default
 from qgen.llm.retry import embed_texts
 
 # Only for the debug print of the most similar pairs; no effect on the result.
@@ -38,13 +38,15 @@ def cluster_by_core(
     embedder: Optional[Any] = None,
     embedding_model: Optional[str] = None,
     require_source_overlap: Optional[bool] = None,
+    *,
+    settings: Settings,
 ):
     if len(lo_list) < 2:
         return lo_list
 
-    similarity_threshold = setting_or_default(similarity_threshold, "cluster_sim_threshold")
-    embedding_model = setting_or_default(embedding_model, "embed_model")
-    require_source_overlap = setting_or_default(require_source_overlap, "cluster_require_source_overlap")
+    similarity_threshold = setting_or_default(similarity_threshold, "cluster_sim_threshold", settings)
+    embedding_model = setting_or_default(embedding_model, "embed_model", settings)
+    require_source_overlap = setting_or_default(require_source_overlap, "cluster_require_source_overlap", settings)
 
     bloom_groups: Dict[str, List[Dict[str, Any]]] = {}
     for obj in lo_list:
@@ -67,7 +69,7 @@ def cluster_by_core(
             texts.append(" ".join(text_parts))
 
         # Step 6: no `except Exception: return lo_list` (unclustered LO); LLMError propagates.
-        embeddings = embed_texts(embedder, texts, model=embedding_model)
+        embeddings = embed_texts(embedder, texts, model=embedding_model, settings=settings)
 
         sim_matrix = cosine_similarity(np.array(embeddings))
 

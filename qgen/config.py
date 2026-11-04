@@ -3,12 +3,16 @@
 Every variable has the prefix QGEN_, except the vendor keys GEMINI_API_KEY and
 ANTHROPIC_API_KEY. This is the only module that reads the environment.
 
-The pipeline gets a `Settings` object as a parameter; code that has none uses
-`get_settings()` (one cached instance per process).
+The pipeline gets a `Settings` object as a parameter and passes it on to every module,
+also to qgen.llm.retry and qgen.llm.factory. Only the entry points (qgen/cli.py, service/,
+tools/) call `get_settings()` (one cached instance per process); a guard test checks it.
 
-Model defaults are the models the code uses today (baseline: gemini-2.5-flash-lite,
-question scoring gemini-2.5-flash), not gemini-4-argon from the specification. A model
-change is a separate decision and needs a new baseline.
+Models: QGEN_LLM_MODEL is the default model. QGEN_LLM_MODEL_LO, _QUESTIONS and _EVAL are
+optional; when not set (or empty) they inherit QGEN_LLM_MODEL. The default of
+QGEN_LLM_MODEL is the baseline model gemini-2.5-flash-lite (not gemini-4-argon from the
+specification). The baseline scored questions with gemini-2.5-flash, so .env.example sets
+QGEN_LLM_MODEL_EVAL=gemini-2.5-flash; without it the eval role inherits QGEN_LLM_MODEL.
+A model change is a separate decision and needs a new baseline.
 
 Model roles (role names of qgen.llm.factory in brackets):
     QGEN_LLM_MODEL            checks: topic extraction [topics], LO faithfulness, question
@@ -29,7 +33,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from qgen.contract.options import OptionDefaults
 
 LlmProvider = Literal["gemini", "openai_compatible", "anthropic"]
-EmbedProvider = Literal["gemini", "openai_compatible"]
+# "anthropic" is accepted here only so that qgen.llm.factory can reject it with a clear
+# message (Anthropic has no embedding API) instead of a generic validation error.
+EmbedProvider = Literal["gemini", "openai_compatible", "anthropic"]
+ROLE_MODEL_FIELDS = ("llm_model_lo", "llm_model_questions", "llm_model_eval")
 
 
 def _split_list(value: str) -> list[str]:
@@ -55,9 +62,13 @@ class Settings(BaseSettings):
         default=SecretStr(""), validation_alias=AliasChoices("ANTHROPIC_API_KEY", "anthropic_api_key")
     )
     llm_model: str = Field(default="gemini-2.5-flash-lite", description="Checks (faithfulness, answerability, topics).")
-    llm_model_lo: str = Field(default="gemini-2.5-flash-lite", description="LO generation, prerequisites.")
-    llm_model_questions: str = Field(default="gemini-2.5-flash-lite", description="Question generation.")
-    llm_model_eval: str = Field(default="gemini-2.5-flash", description="Question quality score.")
+    # Role models: None or "" = inherit llm_model (filled in model_post_init).
+    llm_model_lo: Optional[str] = Field(default=None, description="LO generation, prerequisites.")
+    llm_model_questions: Optional[str] = Field(default=None, description="Question generation.")
+    llm_model_eval: Optional[str] = Field(default=None, description="Question quality score.")
+    llm_max_tokens: int = Field(
+        default=8192, ge=1, description="Anthropic: max_tokens of a call (required by the Messages API)."
+    )
     llm_max_concurrency: int = Field(default=4, ge=1, description="Parallel LLM calls of one worker.")
     llm_retries: int = Field(default=5, ge=1, description="Attempts of one LLM / embedding call (incl. the first).")
     llm_retry_delay_s: float = Field(
@@ -68,6 +79,9 @@ class Settings(BaseSettings):
     # --- Embeddings ------------------------------------------------------------------
     embed_provider: EmbedProvider = "gemini"
     embed_base_url: Optional[str] = None
+    embed_api_key: SecretStr = Field(
+        default=SecretStr(""), description="openai_compatible embeddings: key; empty = QGEN_LLM_API_KEY."
+    )
     embed_model: str = "gemini-embedding-001"
     embed_max_batch: int = Field(default=100, ge=1, description="Texts per embedding call.")
 
@@ -117,6 +131,16 @@ class Settings(BaseSettings):
     workers: int = Field(default=1, ge=1)
     local_model: Optional[str] = None
 
+    def model_post_init(self, __context) -> None:
+        """Role models that are not set inherit QGEN_LLM_MODEL.
+
+        Runs also for `Settings.model_construct(...)` (used by the replay tests), so a
+        constructed object has the same role models as a validated one.
+        """
+        for name in ROLE_MODEL_FIELDS:
+            if not getattr(self, name, None):
+                setattr(self, name, self.llm_model)
+
     @property
     def api_key_list(self) -> list[str]:
         return _split_list(self.api_keys.get_secret_value())
@@ -128,6 +152,11 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return int(self.max_upload_mb * 1024 * 1024)
+
+    @property
+    def effective_embed_api_key(self) -> str:
+        """QGEN_EMBED_API_KEY, or QGEN_LLM_API_KEY when it is empty (backward compatible)."""
+        return self.embed_api_key.get_secret_value() or self.llm_api_key.get_secret_value()
 
     def option_defaults(self) -> OptionDefaults:
         return OptionDefaults(ocr=self.ocr_enabled, lesson_minutes=self.default_lesson_minutes)

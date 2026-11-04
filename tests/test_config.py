@@ -30,12 +30,14 @@ def clean_env(monkeypatch):
 
 def test_defaults(clean_env):
     s = Settings(_env_file=None)
-    # Models: today's models (baseline), not gemini-4-argon from the specification.
+    # Models: today's model (baseline), not gemini-4-argon from the specification. Step 7:
+    # the role models inherit QGEN_LLM_MODEL; the baseline eval model is set in .env.example.
     assert s.llm_provider == "gemini"
     assert s.llm_model == "gemini-2.5-flash-lite"
     assert s.llm_model_lo == "gemini-2.5-flash-lite"
     assert s.llm_model_questions == "gemini-2.5-flash-lite"
-    assert s.llm_model_eval == "gemini-2.5-flash"
+    assert s.llm_model_eval == "gemini-2.5-flash-lite"
+    assert s.llm_max_tokens == 8192
     assert s.embed_provider == "gemini"
     assert s.embed_model == "gemini-embedding-001"
     assert s.llm_base_url is None and s.embed_base_url is None
@@ -75,12 +77,14 @@ def test_model_construct_equals_validated_defaults(clean_env):
     assert Settings.model_construct().model_dump() == Settings(_env_file=None).model_dump()
 
 
-def test_defaults_match_baseline_models(clean_env):
+def test_env_example_keeps_baseline_models(clean_env):
+    """Step 7: the code default of QGEN_LLM_MODEL_EVAL is inheritance; .env.example sets the
+    baseline eval model, so a deployment from .env.example keeps the baseline models."""
     metrics_path = REPO_ROOT / "baseline" / "metrics.json"
     if not metrics_path.is_file():
         pytest.skip("baseline/metrics.json is missing")
     models = json.loads(metrics_path.read_text(encoding="utf-8"))["models"]
-    s = Settings(_env_file=None)
+    s = Settings(_env_file=REPO_ROOT / ".env.example")
     assert s.llm_model_lo == models["lo_generation"] == models["lo_prerequisites"]
     assert s.llm_model_questions == models["item_generation"]
     assert s.llm_model_eval == models["item_evaluation"]
@@ -101,7 +105,7 @@ def test_values_from_environment(clean_env):
     s = Settings(_env_file=None)
     assert s.llm_model == "model-a"
     assert s.llm_model_eval == "model-b"
-    assert s.llm_model_lo == "gemini-2.5-flash-lite"  # other roles keep their default
+    assert s.llm_model_lo == s.llm_model_questions == "model-a"  # other roles inherit QGEN_LLM_MODEL
     assert s.cluster_sim_threshold == 0.9
     assert s.topic_match_threshold == 0.5
     assert s.question_min_score == 4
@@ -210,3 +214,36 @@ def test_setting_or_default_uses_given_settings(clean_env):
     s = Settings.model_construct(lo_batch_size=7)
     assert setting_or_default(None, "lo_batch_size", s) == 7
     assert setting_or_default(3, "lo_batch_size", s) == 3
+
+
+# --- step 7: model inheritance ---------------------------------------------------------
+
+
+def test_role_models_inherit_llm_model(clean_env):
+    clean_env.setenv("QGEN_LLM_MODEL", "base-model")
+    clean_env.setenv("QGEN_LLM_MODEL_QUESTIONS", "")  # empty = not set
+    clean_env.setenv("QGEN_LLM_MODEL_EVAL", "eval-model")
+    s = Settings(_env_file=None)
+    assert (s.llm_model_lo, s.llm_model_questions, s.llm_model_eval) == ("base-model", "base-model", "eval-model")
+
+
+def test_model_construct_inherits_too():
+    s = Settings.model_construct(llm_model="base-model", llm_model_lo="lo-model")
+    assert (s.llm_model_lo, s.llm_model_questions, s.llm_model_eval) == ("lo-model", "base-model", "base-model")
+
+
+def test_llm_max_tokens_from_env(clean_env):
+    clean_env.setenv("QGEN_LLM_MAX_TOKENS", "1024")
+    assert Settings(_env_file=None).llm_max_tokens == 1024
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, llm_max_tokens=0)
+
+
+def test_env_example_lists_every_setting():
+    """Every QGEN_ variable of Settings appears in .env.example (commented or not)."""
+    text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    missing = [
+        name for name in Settings.model_fields
+        if not name.endswith("_api_key") and f"QGEN_{name.upper()}=" not in text
+    ]
+    assert missing == []

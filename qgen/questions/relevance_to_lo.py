@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-from qgen.config import setting_or_default
+from qgen.config import Settings, setting_or_default
 from qgen.llm.retry import embed_texts
 from qgen.lo.clustering import normalize_list_field
 
@@ -14,8 +14,10 @@ def analyze_item_relevance_to_lo(
     embedder=None,
     embedding_model: Optional[str] = None,
     verbose: bool = True,
+    *,
+    settings: Settings,
 ):
-    embedding_model = setting_or_default(embedding_model, "embed_model")
+    embedding_model = setting_or_default(embedding_model, "embed_model", settings)
     report = {
         "stats": {
             "items_total": len(items),
@@ -60,8 +62,8 @@ def analyze_item_relevance_to_lo(
         return report
 
     # Step 6: no `except Exception` returning an empty report; LLMError propagates.
-    item_embeddings = embed_texts(embedder, [row["item_text"] for row in comparable_items], model=embedding_model)
-    lo_embeddings = embed_texts(embedder, [row["lo_text"] for row in comparable_items], model=embedding_model)
+    item_embeddings = embed_texts(embedder, [row["item_text"] for row in comparable_items], model=embedding_model, settings=settings)
+    lo_embeddings = embed_texts(embedder, [row["lo_text"] for row in comparable_items], model=embedding_model, settings=settings)
 
     similarities = []
     for idx, row in enumerate(comparable_items):

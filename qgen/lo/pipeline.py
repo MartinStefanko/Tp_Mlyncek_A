@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from qgen.config import Settings, get_settings, setting_or_default
+from qgen.config import Settings, setting_or_default
 from qgen.context_builder import build_allowed_source_refs, build_source_name_map, parse_source_refs, resolve_source_names
 from qgen.extraction.document_language import resolve_document_language
 from qgen.llm.base import EmbeddingClient, LLMClient
@@ -75,6 +75,7 @@ def _lo_evaluation_reports(
         similarity_threshold=settings.topic_match_threshold,
         verbose=verbose,
         source_max_chars=settings.topic_source_max_chars,
+        settings=settings,
     )
     report_progress(progress_callback, STAGE_LO_EVALUATION, 1, total)
     relevance_report = analyze_lo_relevance_to_segment(
@@ -84,6 +85,7 @@ def _lo_evaluation_reports(
         embedding_model=settings.embed_model,
         verbose=verbose,
         context_max_chars=settings.context_max_chars,
+        settings=settings,
     )
     report_progress(progress_callback, STAGE_LO_EVALUATION, 2, total)
     faithfulness_progress = SubProgress(progress_callback, before=2)
@@ -98,6 +100,7 @@ def _lo_evaluation_reports(
         document_language=document_language,
         context_max_chars=settings.context_max_chars,
         progress_callback=faithfulness_progress,
+        settings=settings,
     )
     done = 2 + faithfulness_progress.sub_total
     report_progress(progress_callback, STAGE_LO_EVALUATION, done, done)
@@ -115,16 +118,16 @@ def generate_lo_pipeline(
     verbose=True,
     document_language=None,
     progress_callback: Optional[ProgressCallback] = None,
-    settings: Optional[Settings] = None,
+    *,
+    settings: Settings,
 ) -> LOPipelineResult:
     """LO pipeline: language, LO generation, clustering, prerequisites, evaluation, filter.
 
     document_language: None or "auto" = detect with the LLM; "sk" / "en" = use it.
-    Values not given (None) come from `settings` (default: get_settings()).
+    Values not given (None) come from `settings` (required; the caller's settings, no get_settings()).
     llm / embedder = None: created by qgen.llm.factory per role.
     An LLM or embedding call that fails for good raises LLMError.
     """
-    settings = settings or get_settings()
     batch_size = setting_or_default(batch_size, "lo_batch_size", settings)
     generation_model = generation_model or model or settings.llm_model_lo
     prerequisites_model = prerequisites_model or model or settings.llm_model_lo
@@ -152,6 +155,7 @@ def generate_lo_pipeline(
         verbose=verbose,
         document_language=document_language,
         progress_callback=SubProgress(progress_callback, after=2),
+        settings=settings,
     )
     attach_source_names(los, source_name_map)
     generation_seconds = time.perf_counter() - generation_start
@@ -193,6 +197,7 @@ def generate_lo_pipeline(
         embedder=embedder,
         embedding_model=settings.embed_model,
         require_source_overlap=settings.cluster_require_source_overlap,
+        settings=settings,
     )
     report_progress(progress_callback, STAGE_LEARNING_OBJECTS, generation_batches + 1, lo_steps_total)
     los.sort(key=lo_page_sort_key)
@@ -205,6 +210,7 @@ def generate_lo_pipeline(
         llm=llm,
         verbose=verbose,
         document_language=document_language,
+        settings=settings,
     )
     attach_source_names(los, source_name_map)
     report_progress(progress_callback, STAGE_LEARNING_OBJECTS, lo_steps_total, lo_steps_total)

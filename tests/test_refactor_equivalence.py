@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 
 from qgen.cli import normalize_lo_for_export
-from qgen.config import Settings
 from qgen.lo.pipeline import generate_lo_pipeline
 from qgen.questions.pipeline import generate_all_items
+from tests.baseline_data import baseline_settings
 from tests.recording_transforms import REMOVED_CALL_MARKERS, REMOVED_ITEM_FIELDS, step4_transforms
 from tests.replay_client import ReplayClient
 
@@ -57,8 +57,10 @@ def replay_run():
     models = _load_json("metrics.json")["models"]
     segments = _load_json("segments.json")
     client = ReplayClient(BASELINE_DIR / "llm_calls.jsonl", transforms=step4_transforms())
-    # Code defaults only; a local .env or QGEN_* variables must not change the baseline run.
-    settings = Settings.model_construct()
+    # Code defaults plus the baseline models (explicit, independent of the model inheritance);
+    # a local .env or QGEN_* variables must not change the baseline run.
+    settings = baseline_settings()
+    assert settings.llm_model_eval == models["item_evaluation"]
 
     lo_result = generate_lo_pipeline(
         segments,

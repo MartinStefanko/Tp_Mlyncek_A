@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 from qgen.context_builder import build_context_for_lo, build_page_map
-from qgen.config import setting_or_default
+from qgen.config import Settings, setting_or_default
 from qgen.llm.retry import embed_texts
 from qgen.lo.clustering import normalize_list_field
 
@@ -16,8 +16,10 @@ def analyze_lo_relevance_to_segment(
     embedding_model: Optional[str] = None,
     verbose: bool = True,
     context_max_chars: Optional[int] = None,
+    *,
+    settings: Settings,
 ):
-    embedding_model = setting_or_default(embedding_model, "embed_model")
+    embedding_model = setting_or_default(embedding_model, "embed_model", settings)
     report = {
         "stats": {
             "los_total": len(los),
@@ -58,9 +60,11 @@ def analyze_lo_relevance_to_segment(
         return report
 
     # Step 6: no `except Exception` returning an empty report; LLMError propagates.
-    lo_embeddings = embed_texts(embedder, [item["lo_text"] for item in comparable_items], model=embedding_model)
+    lo_embeddings = embed_texts(
+        embedder, [item["lo_text"] for item in comparable_items], model=embedding_model, settings=settings
+    )
     source_embeddings = embed_texts(
-        embedder, [item["source_text"] for item in comparable_items], model=embedding_model
+        embedder, [item["source_text"] for item in comparable_items], model=embedding_model, settings=settings
     )
 
     similarities = []
