@@ -37,3 +37,12 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   bez lokálnej nahrávky sa testy preskočia. Zmena promptu = nová nahrávka (tools/baseline.py),
   nie úprava testov.
 - baseline/ (gemini-2.5) je iba historický záznam; žiadny test ho nepoužíva.
+
+## Požiadavky na ďalšie kroky (z kroku 8)
+- Krok 9: `delete_job` (DELETE hotovej úlohy aj mazanie po TTL) musí odstrániť aj rezerváciu
+  external_ref v Redise, inak by nový POST s rovnakým external_ref vrátil zmazanú úlohu.
+- Krok 10 (RQ `JobQueue.contains`): True iba ak úloha čaká vo fronte alebo beží na ŽIVOM workeri.
+  Úloha, ktorej worker spadol (ostala v registri bežiacich úloh), sa nepočíta – inak by ju recovery
+  nikdy neobnovila.
+- Krok 10 (worker): `InvalidTransition` pri zápise completed/failed, keď je úloha medzitým
+  cancelled, je normálne ukončenie – zalogovať (info), nie chyba.

@@ -27,6 +27,7 @@ Model roles (role names of qgen.llm.factory in brackets):
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal, Optional
 
 from pydantic import AliasChoices, Field, SecretStr
@@ -123,6 +124,7 @@ class Settings(BaseSettings):
     max_active_jobs: int = Field(default=10, ge=1)
 
     # --- Retention ---------------------------------------------------------------------
+    data_dir: Path = Field(default=Path("/data"), description="Job storage: jobs/{id}/ and locks/.")
     result_ttl_days: float = Field(default=7, gt=0)
     failed_input_ttl_hours: float = Field(default=24, gt=0)
 

@@ -10,5 +10,6 @@ easyocr
 numpy
 opencv-python
 scikit-learn
+filelock
 
 #pip install -r requirements.txt
