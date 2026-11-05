@@ -1,19 +1,8 @@
-python-dotenv
-google-genai
-openai
-anthropic
-pypdf
-torch
-torchvision
-pymupdf
-easyocr
-numpy
-opencv-python
-scikit-learn
-filelock
-# API real backend (queue, external_ref reservations)
-redis
+# Local development: the whole service incl. OCR, plus test tools.
+#   pip install -r requirements.txt
+-r requirements-service.txt
+-r requirements-ocr.txt
 # tests only
+pytest
 fakeredis
-
-#pip install -r requirements.txt
+jsonschema

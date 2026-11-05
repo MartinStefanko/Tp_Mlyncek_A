@@ -1,0 +1,48 @@
+# Real service for local testing: Redis + API + worker, shared volume /data.
+#   cp .env.example .env      # fill in GEMINI_API_KEY (or another provider)
+#   docker compose -f docker-compose.dev.yml up --build
+# API: http://localhost:8000, documentation: http://localhost:8000/docs
+# Without OCR (INSTALL_OCR=false); the full image with OCR is step 17.
+x-qgen: &qgen
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      INSTALL_OCR: "false"
+  image: qgen:dev
+  env_file: .env
+  environment:
+    QGEN_BACKEND: real
+    QGEN_DATA_DIR: /data
+    QGEN_REDIS_URL: redis://redis:6379/0
+  volumes:
+    - qgen-data:/data
+  depends_on:
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    <<: *qgen
+    ports: ["8000:8000"]
+
+  worker:
+    <<: *qgen
+    command: ["python", "-m", "service.worker"]
+
+volumes:
+  qgen-data:
+  redis-data:

@@ -1,0 +1,15 @@
+# Real service without OCR (Dockerfile, INSTALL_OCR=false): API + worker + pipeline.
+# OCR packages are in requirements-ocr.txt.
+-r requirements-mock.txt
+python-dotenv
+google-genai
+openai
+anthropic
+pypdf
+pymupdf
+numpy
+scikit-learn
+filelock
+redis==8.1.0
+rq==3.0.0
+nh3==0.3.7

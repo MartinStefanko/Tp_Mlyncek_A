@@ -72,7 +72,11 @@ class RealBackend:
             redis_state = "ok" if self._refs.ping() else "error"
         except Exception:  # noqa: BLE001
             redis_state = "error"
-        return {"api": "ok", "redis": redis_state}
+        try:
+            worker_state = "ok" if self._queue.has_live_worker() else "error"
+        except Exception:  # noqa: BLE001
+            worker_state = "error"
+        return {"api": "ok", "redis": redis_state, "worker": worker_state}
 
     # --- create ---------------------------------------------------------------------------
 
@@ -169,7 +173,7 @@ class RealBackend:
     def _rollback(self, record: JobRecord) -> None:
         try:
             self._store.delete_job(record.job_id)
-        except Exception as exc:  # job stays queued on disk; worker recovery (step 10) queues it
+        except Exception as exc:  # job stays queued on disk; worker recovery queues it
             logger.error("rollback delete failed job_id=%s error=%s", record.job_id, type(exc).__name__)
             return
         release_quietly(self._refs, record)

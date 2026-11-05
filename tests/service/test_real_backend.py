@@ -68,8 +68,17 @@ def test_flow_over_job_store(api):
     assert report.json() == fixtures.report.model_dump(mode="json")
 
 
-def test_health_reports_redis(api, monkeypatch):
-    assert api.client.get("/health").json() == {"status": "ok", "components": {"api": "ok", "redis": "ok"}}
+def test_health_reports_redis_and_worker(api, monkeypatch):
+    assert api.client.get("/health").json() == {
+        "status": "ok",
+        "components": {"api": "ok", "redis": "ok", "worker": "ok"},
+    }
+
+    api.real.queue.worker_alive = False
+    response = api.client.get("/health")
+    assert response.status_code == 503
+    assert response.json()["components"]["worker"] == "error"
+    api.real.queue.worker_alive = True
 
     def down():
         raise ConnectionError("redis down")

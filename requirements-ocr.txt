@@ -1,0 +1,5 @@
+# OCR of images in the PDF (options.extraction.ocr / QGEN_OCR_ENABLED). Large (torch).
+easyocr
+torch
+torchvision
+opencv-python

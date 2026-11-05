@@ -1,4 +1,4 @@
-"""Deletion by time (kap. 3 – Mazanie vstupov, Doba uchovania). Scheduling comes in step 10.
+"""Deletion by time (kap. 3 – Mazanie vstupov, Doba uchovania). Scheduled by the worker (service.jobs.tasks.run_maintenance).
 
 - completed / cancelled: the PDFs are deleted at once (the worker also does it right after
   the final state; this catches the rest);

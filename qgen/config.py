@@ -130,6 +130,9 @@ class Settings(BaseSettings):
 
     # --- Queue -------------------------------------------------------------------------
     redis_url: str = Field(default="redis://redis:6379/0", description="Queue, progress cache, external_ref reservations.")
+    job_timeout_s: float = Field(
+        default=3600, gt=0, description="Time limit of one job run in the worker (eko.pdf takes about 290 s)."
+    )
 
     # --- Webhooks ----------------------------------------------------------------------
     webhook_secret: SecretStr = SecretStr("")

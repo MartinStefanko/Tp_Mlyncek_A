@@ -293,6 +293,43 @@ rezervácia `external_ref` a fronta v Redise (`QGEN_REDIS_URL`). API kontroluje 
 heslo PDF a dostupnosť OCR. Worker zatiaľ nie je (krok 10), preto úlohy ostanú v stave `queued`.
 Potrebuje `requirements.txt` (pypdf, redis, qgen/extraction).
 
+## Lokálne spustenie skutočnej služby
+
+Skutočná služba má tri kontajnery: `redis`, `api` (FastAPI) a `worker` (RQ). API a worker
+zdieľajú volume `/data` (job.json, PDF, výsledky). Worker spracuje úlohu celou pipeline a
+volá skutočné LLM API podľa `.env`. Obraz je zatiaľ bez OCR (`INSTALL_OCR=false`); úlohu s
+`extraction.ocr=true` API odmietne. RQ worker potrebuje `fork`, preto beží iba v Dockeri
+(Linux), nie priamo vo Windowse.
+
+```bash
+cp .env.example .env     # vyplňte GEMINI_API_KEY (alebo iného poskytovateľa), voliteľne QGEN_API_KEYS
+docker compose -f docker-compose.dev.yml up --build
+```
+
+`QGEN_BACKEND=real`, `QGEN_DATA_DIR=/data` a `QGEN_REDIS_URL` nastaví compose sám.
+
+- `http://localhost:8000/health` vráti `"worker": "ok"`, keď beží aspoň jeden worker.
+- `http://localhost:8000/docs`: pri **POST /v1/jobs** kliknite na *Try it out*. Do `files`
+  pridajte `Hlavna_cast/ucebny_material/eko.pdf`. Do `options` zadajte napríklad
+  `{"external_ref": "test-1"}`. Ak je nastavený `QGEN_API_KEYS`, vyplňte aj `x-api-key`.
+  Kliknite na *Execute*. Odpoveď 202 obsahuje `job_id`.
+- Stav: **GET /v1/jobs/{job_id}** (stage a progress). Spracovanie eko.pdf trvá asi 5 minút.
+  Po stave `completed` sú výsledky na **GET /v1/jobs/{job_id}/result** a **/report**.
+
+To isté cez curl:
+
+```bash
+curl -X POST http://localhost:8000/v1/jobs -H "X-API-Key: <kluc>"   -F "files=@Hlavna_cast/ucebny_material/eko.pdf" -F 'options={"external_ref": "test-1"}'
+curl -H "X-API-Key: <kluc>" http://localhost:8000/v1/jobs/<job_id>
+curl -H "X-API-Key: <kluc>" http://localhost:8000/v1/jobs/<job_id>/result
+```
+
+Logy workera: `docker compose -f docker-compose.dev.yml logs -f worker`.
+Zastavenie: `docker compose -f docker-compose.dev.yml down` (s `-v` zmaže aj dáta).
+
+Časový limit jednej úlohy je `QGEN_JOB_TIMEOUT_S` (predvolene 3600 s). Výstup `units` je
+zatiaľ dočasný: jedna hodina, všetky otázky typu `open` (krok 14 doplní nové typy a split).
+
 ## Pipeline z príkazového riadka (CLI)
 
 CLI spustí extrakciu, tematické celky a otázky. Výsledky a reporty zapíše do priečinka.

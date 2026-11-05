@@ -7,7 +7,6 @@ import pytest
 
 from service.jobs import JobNotFound
 from service.jobs.cleanup import run_cleanup
-from service.jobs.queue import RedisListJobQueue
 from service.jobs.refs import ExternalRefs, delete_job_and_ref
 
 from .conftest import drive, new_job
@@ -83,11 +82,3 @@ def test_cleanup_after_ttl_releases_reservation(store, refs, clock):
     assert refs.lookup(old.owner, "gen-old") is None
     assert refs.lookup(young.owner, "gen-young") == young.job_id
 
-
-def test_redis_list_queue(redis_client):
-    queue = RedisListJobQueue(redis_client)
-    assert not queue.contains("a")
-    queue.enqueue("a")
-    queue.enqueue("b")
-    assert queue.contains("a") and queue.contains("b")
-    assert redis_client.lrange("qgen:queue", 0, -1) == [b"a", b"b"]

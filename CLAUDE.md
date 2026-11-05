@@ -46,3 +46,9 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   nikdy neobnovila.
 - Krok 10 (worker): `InvalidTransition` pri zápise completed/failed, keď je úloha medzitým
   cancelled, je normálne ukončenie – zalogovať (info), nie chyba.
+
+## Požiadavky na ďalšie kroky (z kroku 10)
+- Krok 11 (webhooky): job.stage_changed pri zápise nového kroku v `ProgressWriter.write`
+  (service/jobs/runner.py), job.completed/failed/cancelled v koncových stavoch `JobRunner`.
+  Opakovania cez `enqueue_in` na tej istej fronte "qgen" (worker beží s `with_scheduler=True`).
+- Krok 14: `service/jobs/legacy_output.py` je dočasný – nahradiť skutočným krokom output.
