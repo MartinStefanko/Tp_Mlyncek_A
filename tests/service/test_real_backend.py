@@ -69,20 +69,25 @@ def test_flow_over_job_store(api):
 
 
 def test_health_reports_redis_and_worker(api, monkeypatch):
-    assert api.client.get("/health").json() == {
+    response = api.client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {
         "status": "ok",
         "components": {"api": "ok", "redis": "ok", "worker": "ok", "webhook_worker": "ok"},
     }
 
+    # A missing worker is only in the body: the API still accepts jobs.
     api.real.events.worker_alive = False
     response = api.client.get("/health")
-    assert response.status_code == 503
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
     assert response.json()["components"]["webhook_worker"] == "error"
     api.real.events.worker_alive = True
 
     api.real.queue.worker_alive = False
     response = api.client.get("/health")
-    assert response.status_code == 503
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
     assert response.json()["components"]["worker"] == "error"
     api.real.queue.worker_alive = True
 
@@ -91,8 +96,25 @@ def test_health_reports_redis_and_worker(api, monkeypatch):
 
     monkeypatch.setattr(api.real.refs, "ping", down)
     response = api.client.get("/health")
-    assert response.status_code == 503
+    assert response.status_code == 503  # only Redis decides the HTTP status
+    assert response.json()["status"] == "degraded"
     assert response.json()["components"]["redis"] == "error"
+
+
+def test_health_webhook_worker_disabled_without_allowed_hosts(api_factory):
+    api = api_factory(webhook_allowed_hosts="")
+    api.real.events.worker_alive = False  # not needed when webhooks are off
+    response = api.client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "components": {"api": "ok", "redis": "ok", "worker": "ok", "webhook_worker": "disabled"},
+    }
+
+    api.real.queue.worker_alive = False
+    response = api.client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
 
 
 # --- PDF and OCR checks ---------------------------------------------------------------------

@@ -309,8 +309,10 @@ docker compose -f docker-compose.dev.yml up --build
 
 `QGEN_BACKEND=real`, `QGEN_DATA_DIR=/data` a `QGEN_REDIS_URL` nastaví compose sám.
 
-- `http://localhost:8000/health` vráti `"worker": "ok"`, keď beží aspoň jeden worker, a
-  `"webhook_worker": "ok"`, keď beží webhook-worker.
+- `http://localhost:8000/health` vráti HTTP 200, kým API vie prijímať úlohy (Redis je
+  dostupný); 503 iba pri nedostupnom Redise. V tele je `"worker"` a `"webhook_worker"`
+  (`"ok"` / `"error"`; `"webhook_worker": "disabled"`, keď je `QGEN_WEBHOOK_ALLOWED_HOSTS`
+  prázdne) a celkový `"status"`: `"ok"`, alebo `"degraded"`, ak niektorá časť nie je ok.
 - `http://localhost:8000/docs`: pri **POST /v1/jobs** kliknite na *Try it out*. Do `files`
   pridajte `Hlavna_cast/ucebny_material/eko.pdf`. Do `options` zadajte napríklad
   `{"external_ref": "test-1"}`. Ak je nastavený `QGEN_API_KEYS`, vyplňte aj `x-api-key`.

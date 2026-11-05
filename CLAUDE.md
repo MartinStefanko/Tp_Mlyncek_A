@@ -16,7 +16,8 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   nečakalo na bežiacu úlohu. Odchýlka od spec (4 kontajnery namiesto 3). Najprv zápis
   job.json, potom zaradenie webhooku s record z toho zápisu. job.cancelled posiela iba API
   (DELETE), worker pri zrušení nič. worker_lost z recovery posiela job.failed.
-  /health hlási aj `webhook_worker`.
+  /health: HTTP 503 iba pri nedostupnom Redise, inak 200; stav workerov iba v tele
+  (`status` ok/degraded, `webhook_worker` "disabled" pri vypnutých webhookoch).
 - Čistenie HTML knižnicou `nh3`.
 
 ## Pravidlá

@@ -16,7 +16,8 @@ POST of an existing job (e.g. after a timeout in Laravel) gets 200 even at the l
 
 A job of another owner behaves as if it did not exist (404, not 403). Webhooks: DELETE of a
 queued or running job writes cancelled and then queues job.cancelled (JobEvents); the
-worker sends no event for a cancel. /health reports the webhook worker as "webhook_worker".
+worker sends no event for a cancel. /health reports the webhook worker as "webhook_worker"
+("disabled" when QGEN_WEBHOOK_ALLOWED_HOSTS is empty).
 """
 
 import logging
@@ -81,7 +82,9 @@ class RealBackend:
         except Exception:  # noqa: BLE001
             worker_state = "error"
         components = {"api": "ok", "redis": redis_state, "worker": worker_state}
-        if self._events is not None:
+        if not self._settings.allowed_webhook_hosts:
+            components["webhook_worker"] = "disabled"
+        elif self._events is not None:
             try:
                 components["webhook_worker"] = "ok" if self._events.has_live_worker() else "error"
             except Exception:  # noqa: BLE001

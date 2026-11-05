@@ -16,13 +16,27 @@ router = APIRouter()
 _AUTH_ERRORS: dict[int | str, dict[str, Any]] = {401: {"model": ErrorResponse, "description": "Missing or invalid X-API-Key."}}
 
 
-@router.get("/health", tags=["service"], summary="Service state (API, Redis, worker, webhook worker). No API key.")
+# States that count as fine: "mock" (mock backend), "disabled" (webhooks off).
+_FINE_STATES = frozenset({"ok", "mock", "disabled"})
+
+
+@router.get(
+    "/health",
+    tags=["service"],
+    summary="Service state (API, Redis, worker, webhook worker). No API key.",
+    description=(
+        "HTTP 200 while the API can accept jobs (Redis available), 503 only when Redis is not "
+        'available. "status" is "ok", or "degraded" when a component is not ok; '
+        '"webhook_worker" is "disabled" when QGEN_WEBHOOK_ALLOWED_HOSTS is empty.'
+    ),
+)
 def health(backend: Backend) -> JSONResponse:
     components = backend.health()
-    healthy = all(state in ("ok", "mock") for state in components.values())
+    accepts_jobs = components.get("redis") in ("ok", "mock")
+    degraded = any(state not in _FINE_STATES for state in components.values())
     return JSONResponse(
-        status_code=200 if healthy else 503,
-        content={"status": "ok" if healthy else "error", "components": components},
+        status_code=200 if accepts_jobs else 503,
+        content={"status": "degraded" if degraded else "ok", "components": components},
     )
 
 
