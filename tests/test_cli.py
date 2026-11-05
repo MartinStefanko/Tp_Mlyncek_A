@@ -88,6 +88,7 @@ def test_cli_writes_results_and_reports(tmp_path, capsys, baseline_segments_extr
 
 
 def test_cli_passes_ocr_and_language(tmp_path, monkeypatch, baseline_segments_extraction):
+    require_baseline()  # the fake extraction reads baseline_v3/segments.json
     captured = {}
 
     def fake_run_pipeline(segments, **kwargs):

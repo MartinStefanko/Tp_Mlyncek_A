@@ -21,6 +21,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Callable, Optional
 
 from service.jobs.cleanup import CleanupResult, run_cleanup_from_settings
+from service.jobs.events import JobEvents
 from service.jobs.recovery import RecoveryResult, recover_jobs
 from service.jobs.redis_lock import RedisLock
 from service.jobs.refs import ExternalRefs
@@ -51,6 +52,7 @@ class WorkerContext:
     queue: RqJobQueue
     refs: ExternalRefs
     runner: JobRunner
+    events: Optional[JobEvents] = None
     wall_clock: Callable[[], float] = time.time
 
 
@@ -58,14 +60,18 @@ _context: Optional[WorkerContext] = None
 
 
 def build_context(settings: "ServiceSettings", client: "redis.Redis", **runner_kwargs) -> WorkerContext:
+    from service.webhooks.rq_delivery import RqWebhookNotifier
+
     store = JobStore.from_settings(settings)
+    events = RqWebhookNotifier(client, settings)
     return WorkerContext(
         settings=settings,
         redis=client,
         store=store,
         queue=RqJobQueue(client, job_timeout_s=settings.job_timeout_s),
         refs=ExternalRefs(client),
-        runner=JobRunner(store, settings, **runner_kwargs),
+        runner=JobRunner(store, settings, events=events, **runner_kwargs),
+        events=events,
     )
 
 
@@ -101,7 +107,7 @@ def run_maintenance() -> Optional[CleanupResult]:
                 logger.info("maintenance already running on another worker, skipped")
                 return None
             result = run_cleanup_from_settings(context.store, context.settings, context.store.clock(), context.refs)
-            recovery = recover_jobs(context.store, context.queue)
+            recovery = recover_jobs(context.store, context.queue, events=context.events)
             if recovery.requeued or recovery.failed:
                 logger.info("maintenance recovery requeued=%d failed=%d", len(recovery.requeued), len(recovery.failed))
             return result
@@ -117,7 +123,7 @@ def recover_at_start(context: WorkerContext) -> Optional[RecoveryResult]:
         if not lock.acquired:
             logger.info("recovery already running on another worker, skipped")
             return None
-        result = recover_jobs(context.store, context.queue)
+        result = recover_jobs(context.store, context.queue, events=context.events)
     logger.info(
         "recovery requeued=%d failed=%d skipped=%d", len(result.requeued), len(result.failed), len(result.skipped)
     )

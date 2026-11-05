@@ -18,7 +18,11 @@ The message never has a prompt or document text. The PDFs of a failed job stay f
 (QGEN_FAILED_INPUT_TTL_HOURS). A cancelled job (also InvalidTransition when writing the
 final state after a cancel) is a normal end: logged, PDFs deleted.
 
-Webhooks (job.stage_changed, job.completed, …) come in step 11.
+Webhooks (JobEvents, service/jobs/events.py), always after the write of job.json and with
+the record of that write:
+    job.stage_changed – ProgressWriter wrote a new step (at most once per step in a run)
+    job.completed / job.failed – the final state was written
+A cancel is not sent from here: the API sends job.cancelled when it writes the state.
 """
 
 import logging
@@ -36,6 +40,7 @@ from qgen.llm.errors import LLMConfigError, LLMError
 from qgen.llm.factory import check_config, get_embedder, get_llm
 from qgen.pipeline import run_pipeline
 from qgen.progress import PIPELINE_STAGES
+from service.jobs.events import JobEvents
 from service.jobs.legacy_output import build_output
 from service.jobs.models import JobRecord
 from service.jobs.store import InvalidTransition, JobNotFound, JobStore
@@ -118,8 +123,10 @@ class ProgressWriter:
         timeout_s: float,
         interval_s: float = PROGRESS_INTERVAL_S,
         monotonic: Callable[[], float] = time.monotonic,
+        events: Optional[JobEvents] = None,
     ) -> None:
         self.store = store
+        self.events = events
         self.job_id = job_id
         self.deadline = deadline
         self.timeout_s = timeout_s
@@ -157,11 +164,14 @@ class ProgressWriter:
             record.progress = progress
 
         try:
-            self.store.update(self.job_id, change)
+            record = self.store.update(self.job_id, change)
         except JobNotFound:
             raise JobLost() from None
+        new_stage = stage != self.written_stage
         self.written_stage = stage
         self.last_write = self.monotonic()
+        if new_stage and self.events is not None:
+            self.events.notify("job.stage_changed", record)
 
 
 # --- runner ---------------------------------------------------------------------------------
@@ -179,6 +189,7 @@ class JobRunner:
     monotonic: Callable[[], float] = time.monotonic
     extract: Callable[..., list] = field(default=pdfs_to_text)
     pipeline: Callable[..., Any] = field(default=run_pipeline)
+    events: Optional[JobEvents] = None
 
     def run(self, job_id: str) -> Optional[str]:
         """Run the job; returns its final status, or None when the run did not start."""
@@ -193,6 +204,7 @@ class JobRunner:
             timeout_s=self.settings.job_timeout_s,
             interval_s=self.progress_interval_s,
             monotonic=self.monotonic,
+            events=self.events,
         )
         try:
             self._process(record, progress)
@@ -283,12 +295,13 @@ class JobRunner:
 
     def _complete_or_cancelled(self, job_id: str) -> Optional[str]:
         try:
-            self.store.update(job_id, _to_completed)
+            record = self.store.update(job_id, _to_completed)
         except InvalidTransition:
             return self._final_after_conflict(job_id)
         except JobNotFound:
             logger.info("job deleted during the run job_id=%s", job_id)
             return None
+        self._notify("job.completed", record)
         self._delete_inputs(job_id)
         logger.info("job completed job_id=%s", job_id)
         return "completed"
@@ -301,12 +314,13 @@ class JobRunner:
             record.error = error
 
         try:
-            self.store.update(job_id, change)
+            record = self.store.update(job_id, change)
         except InvalidTransition:
             return self._final_after_conflict(job_id)
         except JobNotFound:
             logger.info("job deleted during the run job_id=%s", job_id)
             return None
+        self._notify("job.failed", record)
         logger.warning("job failed job_id=%s code=%s", job_id, error.code)
         return "failed"
 
@@ -325,6 +339,10 @@ class JobRunner:
         logger.info("job cancelled during the run, stopped job_id=%s", job_id)
         self._delete_inputs(job_id)
         return "cancelled"
+
+    def _notify(self, event: str, record: JobRecord) -> None:
+        if self.events is not None:
+            self.events.notify(event, record)  # type: ignore[arg-type]
 
     def _delete_inputs(self, job_id: str) -> None:
         try:

@@ -6,13 +6,15 @@ runs started by a worker; a running job that already had `max_attempts` runs goe
 with error.code worker_lost. A queued job never ran, so it is only queued again.
 
 job.json is written first, then the job is enqueued: a crash between the two is fixed by
-the next start.
+the next start. A job that goes to failed (worker_lost) gets the webhook job.failed.
 """
 
 import logging
 from dataclasses import dataclass, field
+from typing import Optional
 
 from qgen.contract import JobError
+from service.jobs.events import JobEvents
 from service.jobs.models import JobRecord
 from service.jobs.queue import JobQueue
 from service.jobs.store import InvalidTransition, JobNotFound, JobStore
@@ -29,15 +31,19 @@ class RecoveryResult:
     skipped: list[str] = field(default_factory=list)  # changed meanwhile (e.g. cancelled, deleted)
 
 
-def recover_jobs(store: JobStore, queue: JobQueue, *, max_attempts: int = MAX_ATTEMPTS) -> RecoveryResult:
+def recover_jobs(
+    store: JobStore, queue: JobQueue, *, max_attempts: int = MAX_ATTEMPTS, events: Optional[JobEvents] = None
+) -> RecoveryResult:
     result = RecoveryResult()
     for job in store.iter_jobs():
         if not job.is_active or queue.contains(job.job_id):
             continue
         try:
             if job.status == "running" and job.attempts >= max_attempts:
-                store.update(job.job_id, _worker_lost)
+                failed = store.update(job.job_id, _worker_lost)
                 result.failed.append(job.job_id)
+                if events is not None:
+                    events.notify("job.failed", failed)
                 logger.warning("job lost twice, failed job_id=%s attempts=%d", job.job_id, job.attempts)
                 continue
             if job.status == "running":

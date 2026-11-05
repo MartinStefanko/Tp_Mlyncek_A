@@ -1,0 +1,41 @@
+"""Webhook worker: delivers webhooks from the RQ queue "qgen-webhooks".
+
+    python -m service.webhook_worker
+
+Its own container (same image as the API and the worker). It serves only the webhook queue,
+so a delivery never waits for a running job of the pipeline. The built-in scheduler
+(--with-scheduler) moves the retries (enqueue_in 10 / 60 / 300 s) back to the queue.
+No LLM configuration, no recovery and no maintenance here (that is service.worker).
+"""
+
+import logging
+import sys
+from typing import Optional
+
+from service.settings import ServiceSettings
+from service.webhooks import rq_delivery
+
+logger = logging.getLogger("qgen.webhooks")
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    settings = ServiceSettings()
+    if not settings.allowed_webhook_hosts:
+        logger.warning("QGEN_WEBHOOK_ALLOWED_HOSTS is empty: every webhook will be refused")
+    elif not settings.webhook_secret.get_secret_value():
+        logger.warning("QGEN_WEBHOOK_SECRET is empty: webhooks are signed with an empty key")
+
+    import redis
+    from rq import Worker
+
+    client = redis.Redis.from_url(settings.redis_url)
+    context = rq_delivery.build_context(settings, client)
+    rq_delivery.configure(context)
+    logger.info("webhook worker started queue=%s timeout_s=%g", context.queue.name, settings.webhook_timeout_s)
+    Worker([context.queue], connection=client).work(with_scheduler=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

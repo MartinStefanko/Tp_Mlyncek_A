@@ -16,6 +16,7 @@ from qgen.contract import JobOptions, resolve_options
 from service.backend import UploadedFile
 from service.errors import ApiError, invalid_options, invalid_options_from
 from service.settings import ServiceSettings
+from service.webhooks.hosts import callback_host_allowed
 
 PDF_MAGIC = b"%PDF"
 _READ_CHUNK = 1024 * 1024
@@ -47,7 +48,7 @@ def check_callback_host(options: JobOptions, settings: ServiceSettings) -> None:
     assert url is not None
     host = (url.host or "").lower()
     allowed = settings.allowed_webhook_hosts
-    if host in allowed or f"{host}:{url.port}" in allowed:
+    if callback_host_allowed(url, allowed):
         return
     reason = "webhooks are disabled (QGEN_WEBHOOK_ALLOWED_HOSTS is empty)" if not allowed else "host is not allowed"
     raise invalid_options(

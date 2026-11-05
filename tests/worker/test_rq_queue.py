@@ -168,12 +168,27 @@ def test_maintenance_deletes_old_jobs_with_their_reservation(env):
 def test_health_worker_state(env):
     response = env.client.get("/health")
     assert response.status_code == 503
-    assert response.json()["components"] == {"api": "ok", "redis": "ok", "worker": "error"}
+    assert response.json()["components"] == {"api": "ok", "redis": "ok", "worker": "error", "webhook_worker": "error"}
 
     worker = _live_worker(env)
     response = env.client.get("/health")
-    assert response.status_code == 200
+    assert response.status_code == 503  # the webhook worker is still missing
     assert response.json()["components"]["worker"] == "ok"
+
+    hook_worker = Worker([env.hooks.queue], connection=env.redis, name="w-hooks")
+    hook_worker.register_birth()
+    response = env.client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["components"] == {"api": "ok", "redis": "ok", "worker": "ok", "webhook_worker": "ok"}
 
     worker.register_death()
     assert env.client.get("/health").json()["components"]["worker"] == "error"
+    assert env.client.get("/health").json()["components"]["webhook_worker"] == "ok"
+
+    hook_worker.register_death()
+    assert env.client.get("/health").json()["components"]["webhook_worker"] == "error"
+
+
+def test_health_job_worker_does_not_count_as_webhook_worker(env):
+    _live_worker(env)  # serves only "qgen"
+    assert env.client.get("/health").json()["components"]["webhook_worker"] == "error"

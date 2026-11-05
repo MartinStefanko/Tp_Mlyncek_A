@@ -14,8 +14,9 @@ So a 202 means the PDFs are on disk and the job is queued; after any error there
 neither a stored job nor a reservation. Step 1 comes before the limit so that a repeated
 POST of an existing job (e.g. after a timeout in Laravel) gets 200 even at the limit.
 
-A job of another owner behaves as if it did not exist (404, not 403). Webhooks are not
-sent here (job.cancelled on DELETE comes in step 11).
+A job of another owner behaves as if it did not exist (404, not 403). Webhooks: DELETE of a
+queued or running job writes cancelled and then queues job.cancelled (JobEvents); the
+worker sends no event for a cancel. /health reports the webhook worker as "webhook_worker".
 """
 
 import logging
@@ -28,6 +29,7 @@ from qgen.contract import JobListItem, JobStatus, Report, UnitsResult
 from service.backend import CreateJobRequest, CreateJobResult
 from service.errors import ApiError
 from service.jobs.convert import to_job_status, to_list_item
+from service.jobs.events import JobEvents
 from service.jobs.models import JobRecord
 from service.jobs.queue import JobQueue
 from service.jobs.refs import ExternalRefs, delete_job_and_ref, release_quietly
@@ -49,10 +51,12 @@ class RealBackend:
         store: JobStore,
         queue: JobQueue,
         refs: ExternalRefs,
+        events: Optional[JobEvents] = None,
         *,
         on_stop: Optional[Callable[[], None]] = None,
     ) -> None:
         self._settings = settings
+        self._events = events
         self._store = store
         self._queue = queue
         self._refs = refs
@@ -76,7 +80,13 @@ class RealBackend:
             worker_state = "ok" if self._queue.has_live_worker() else "error"
         except Exception:  # noqa: BLE001
             worker_state = "error"
-        return {"api": "ok", "redis": redis_state, "worker": worker_state}
+        components = {"api": "ok", "redis": redis_state, "worker": worker_state}
+        if self._events is not None:
+            try:
+                components["webhook_worker"] = "ok" if self._events.has_live_worker() else "error"
+            except Exception:  # noqa: BLE001
+                components["webhook_worker"] = "error"
+        return components
 
     # --- create ---------------------------------------------------------------------------
 
@@ -229,6 +239,8 @@ class RealBackend:
                 return to_job_status(self._find(job_id, owner))
             except JobNotFound:
                 raise _job_not_found(job_id) from None
+            if self._events is not None:
+                self._events.notify("job.cancelled", record)
             if was_queued:  # no worker reads these PDFs; a running job's PDFs are deleted by the worker
                 self._store.delete_inputs(job_id)
             logger.info("job cancelled job_id=%s", job_id)

@@ -1,8 +1,9 @@
 """One webhook delivery: body, headers, one attempt, retry plan.
 
 This module does not schedule anything. The mock retries with asyncio
-(service/webhooks/asyncio_dispatcher.py); the real worker will call send_once()
-from an RQ job and plan the next attempt with enqueue_in(next_retry_delay(...)).
+(service/webhooks/asyncio_dispatcher.py); the real service's webhook worker calls
+post_once() from an RQ job and plans the next attempt with enqueue_in(next_retry_delay(...))
+(service/webhooks/rq_delivery.py).
 
 Per delivery the body, X-QGen-Delivery and occurred_at stay the same for every
 attempt; X-QGen-Timestamp and the signature are computed again for each attempt.
@@ -71,15 +72,36 @@ def _log_result(delivery: WebhookDelivery, attempt: int, outcome: str) -> None:
     )
 
 
-def send_once(client: httpx.Client, delivery: WebhookDelivery, secret: str, timestamp: int, attempt: int = 1) -> bool:
-    """One synchronous attempt; True on 2xx. The timeout is set on the client."""
+@dataclass(frozen=True)
+class AttemptResult:
+    """Outcome of one attempt: the HTTP status, or the type of the transport error."""
+
+    ok: bool
+    status_code: Optional[int] = None
+    error_type: Optional[str] = None
+
+    @property
+    def outcome(self) -> str:
+        return f"HTTP {self.status_code}" if self.status_code is not None else str(self.error_type)
+
+
+def post_once(
+    client: httpx.Client, delivery: WebhookDelivery, secret: str, timestamp: int, attempt: int = 1
+) -> AttemptResult:
+    """One synchronous attempt (the real service's webhook worker). The timeout is set on the client."""
     try:
         response = client.post(delivery.url, content=delivery.body, headers=build_headers(delivery, secret, timestamp))
     except httpx.HTTPError as exc:
-        _log_result(delivery, attempt, type(exc).__name__)
-        return False
-    _log_result(delivery, attempt, f"HTTP {response.status_code}")
-    return response.is_success
+        result = AttemptResult(ok=False, error_type=type(exc).__name__)
+    else:
+        result = AttemptResult(ok=response.is_success, status_code=response.status_code)
+    _log_result(delivery, attempt, result.outcome)
+    return result
+
+
+def send_once(client: httpx.Client, delivery: WebhookDelivery, secret: str, timestamp: int, attempt: int = 1) -> bool:
+    """One synchronous attempt; True on 2xx. The timeout is set on the client."""
+    return post_once(client, delivery, secret, timestamp, attempt).ok
 
 
 async def send_once_async(

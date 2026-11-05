@@ -22,6 +22,7 @@ from pypdf import PdfWriter
 
 from qgen.contract import ErrorResponse, JobError, JobOptions, WebhookPayload
 from service.jobs import JobStore
+from service.jobs.events import InMemoryJobEvents
 from service.jobs.queue import InMemoryJobQueue
 from service.jobs.refs import ExternalRefs
 from service.main import create_app
@@ -111,6 +112,7 @@ class RealParts:
     redis: fakeredis.FakeRedis
     queue: InMemoryJobQueue
     refs: ExternalRefs
+    events: InMemoryJobEvents = field(default_factory=InMemoryJobEvents)
 
 
 @dataclass
@@ -244,7 +246,7 @@ def api_factory(backend_kind: str, tmp_path, monkeypatch) -> Iterator[Callable[.
             store = JobStore.from_settings(settings, clock=clock, lock_timeout_s=5)
             redis_client = fakeredis.FakeRedis()
             real = RealParts(store, redis_client, InMemoryJobQueue(), ExternalRefs(redis_client))
-            backend = RealBackend(settings, store, real.queue, real.refs)
+            backend = RealBackend(settings, store, real.queue, real.refs, real.events)
         client = TestClient(create_app(settings, backend), raise_server_exceptions=False)
         client.__enter__()
         clients.append(client)

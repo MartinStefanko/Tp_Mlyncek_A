@@ -38,13 +38,15 @@ def build_backend(settings: ServiceSettings) -> JobBackend:
 
 
 def build_real_backend(settings: ServiceSettings) -> JobBackend:
-    """job.json in QGEN_DATA_DIR, external_ref reservations and the RQ queue in Redis (QGEN_REDIS_URL)."""
+    """job.json in QGEN_DATA_DIR; external_ref reservations, the RQ job queue and the webhook
+    queue in Redis (QGEN_REDIS_URL)."""
     import redis
 
     from service.jobs import JobStore
     from service.jobs.refs import ExternalRefs
     from service.jobs.rq_queue import RqJobQueue
     from service.real_backend import RealBackend
+    from service.webhooks.rq_delivery import RqWebhookNotifier
 
     client = redis.Redis.from_url(settings.redis_url)
     return RealBackend(
@@ -52,6 +54,7 @@ def build_real_backend(settings: ServiceSettings) -> JobBackend:
         JobStore.from_settings(settings),
         RqJobQueue(client, job_timeout_s=settings.job_timeout_s),
         ExternalRefs(client),
+        RqWebhookNotifier(client, settings),
         on_stop=client.close,
     )
 

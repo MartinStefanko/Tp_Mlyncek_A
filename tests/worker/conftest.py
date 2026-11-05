@@ -3,18 +3,27 @@
 No real LLM / embedding API: FakeLLM with a scripted model, or the replay client over
 baseline_v3 (skipped when the recording is missing). PDF extraction is replaced by fixed
 segments unless a test needs the real one.
+
+Webhooks: the API and the worker queue them on "qgen-webhooks" (RqWebhookNotifier);
+`env.hooks.deliver()` runs the webhook worker (SimpleWorker over that queue) against a
+fake Laravel (httpx.MockTransport) with a fake Unix clock. Retries planned by enqueue_in
+wait in RQ's ScheduledJobRegistry; `env.hooks.release_scheduled()` moves them to the queue.
 """
 
 import json
+import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
 import fakeredis
+import httpx
 import pytest
 from fastapi.testclient import TestClient
-from rq import SimpleWorker
+from rq import Queue, SimpleWorker
+from rq.job import Job
+from rq.registry import ScheduledJobRegistry
 
 from qgen.llm import retry
 from qgen.progress import STAGE_EXTRACT
@@ -26,11 +35,15 @@ from service.jobs.runner import JobRunner
 from service.main import create_app
 from service.real_backend import RealBackend
 from service.settings import ServiceSettings
+from service.webhooks import rq_delivery
+from service.webhooks.rq_delivery import RqWebhookNotifier
 from tests.fakes import FakeEmbedder, FakeLLM
 from tests.service.conftest import make_pdf
 
 API_KEY = "test-key"
 HEADERS = {"X-API-Key": API_KEY}
+WEBHOOK_SECRET = "test-secret"
+CALLBACK_URL = "http://eceh-backend/api/internal/qgen/webhook"
 EKO_PDF = Path(__file__).resolve().parent.parent / "fixtures" / "eko.pdf"
 
 SEGMENTS = [
@@ -102,6 +115,63 @@ def fixed_extraction(segments: list[dict]) -> Callable[..., list[dict]]:
     return extract
 
 
+# --- webhooks ------------------------------------------------------------------------------
+
+
+class UnixClock:
+    def __init__(self, start: float = 1_793_701_125.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@dataclass
+class FakeLaravel:
+    """Records every webhook request; answers with `statuses` in turn, then 200."""
+
+    statuses: list[int] = field(default_factory=list)
+    requests: list[httpx.Request] = field(default_factory=list)
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return httpx.Response(self.statuses.pop(0) if self.statuses else 200)
+
+    def payloads(self) -> list[dict]:
+        return [json.loads(request.content) for request in self.requests]
+
+    def events(self) -> list[str]:
+        return [request.headers["X-QGen-Event"] for request in self.requests]
+
+
+@dataclass
+class WebhookEnv:
+    redis: fakeredis.FakeRedis
+    laravel: FakeLaravel
+    clock: UnixClock
+    context: rq_delivery.DeliveryContext
+
+    @property
+    def queue(self) -> Queue:
+        return self.context.queue
+
+    def deliver(self) -> None:
+        """The webhook worker processes everything that waits in "qgen-webhooks"."""
+        SimpleWorker([self.queue], connection=self.redis).work(burst=True)
+
+    def release_scheduled(self) -> list[float]:
+        """Move planned retries to the queue (as the RQ scheduler does); their delays in s."""
+        registry = ScheduledJobRegistry(queue=self.queue)
+        delays = []
+        for job_id in registry.get_job_ids():
+            job = Job.fetch(job_id, connection=self.redis)
+            # RQ stores the time in whole seconds (rounded down): ceil gives the planned delay
+            delays.append(math.ceil(registry.get_scheduled_time(job).timestamp() - job.created_at.timestamp()))
+            registry.remove(job)
+            self.queue._enqueue_job(job)
+        return delays
+
+
 # --- environment ---------------------------------------------------------------------------
 
 
@@ -114,6 +184,7 @@ class WorkerEnv:
     queue: RqJobQueue
     refs: ExternalRefs
     context: tasks.WorkerContext
+    hooks: WebhookEnv
 
     @property
     def runner(self) -> JobRunner:
@@ -146,7 +217,13 @@ class WorkerEnv:
 
 
 def worker_settings(tmp_path: Path, **overrides: Any) -> ServiceSettings:
-    values: dict[str, Any] = {"backend": "real", "api_keys": API_KEY, "data_dir": tmp_path / "data"}
+    values: dict[str, Any] = {
+        "backend": "real",
+        "api_keys": API_KEY,
+        "data_dir": tmp_path / "data",
+        "webhook_allowed_hosts": "eceh-backend",
+        "webhook_secret": WEBHOOK_SECRET,
+    }
     values.update(overrides)
     return ServiceSettings(_env_file=None, **values)
 
@@ -169,6 +246,7 @@ def env_factory(tmp_path, monkeypatch) -> Iterator[Callable[..., WorkerEnv]]:
         store = JobStore.from_settings(settings, lock_timeout_s=10)
         queue = RqJobQueue(client_redis, job_timeout_s=settings.job_timeout_s)
         refs = ExternalRefs(client_redis)
+        events = RqWebhookNotifier(client_redis, settings)
         runner = JobRunner(
             store,
             settings,
@@ -176,18 +254,27 @@ def env_factory(tmp_path, monkeypatch) -> Iterator[Callable[..., WorkerEnv]]:
             embedder=FakeEmbedder(default=OrthogonalVectors()),
             progress_interval_s=0,
             extract=fixed_extraction(SEGMENTS),
+            events=events,
         )
-        context = tasks.WorkerContext(settings, client_redis, store, queue, refs, runner)
+        context = tasks.WorkerContext(settings, client_redis, store, queue, refs, runner, events)
         tasks.configure(context)
-        client = TestClient(create_app(settings, RealBackend(settings, store, queue, refs)), raise_server_exceptions=False)
+        laravel, clock = FakeLaravel(), UnixClock()
+        delivery = rq_delivery.build_context(
+            settings, client_redis, transport=httpx.MockTransport(laravel), unix_time=clock
+        )
+        rq_delivery.configure(delivery)
+        backend = RealBackend(settings, store, queue, refs, events)
+        client = TestClient(create_app(settings, backend), raise_server_exceptions=False)
         client.__enter__()
         clients.append(client)
-        return WorkerEnv(client, settings, client_redis, store, queue, refs, context)
+        hooks = WebhookEnv(client_redis, laravel, clock, delivery)
+        return WorkerEnv(client, settings, client_redis, store, queue, refs, context, hooks)
 
     yield factory
     for client in clients:
         client.__exit__(None, None, None)
     tasks.configure(None)
+    rq_delivery.configure(None)
 
 
 @pytest.fixture

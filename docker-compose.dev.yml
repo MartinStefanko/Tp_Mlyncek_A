@@ -1,8 +1,10 @@
-# Real service for local testing: Redis + API + worker, shared volume /data.
+# Real service for local testing: Redis + API + worker + webhook-worker, shared volume /data.
 #   cp .env.example .env      # fill in GEMINI_API_KEY (or another provider)
 #   docker compose -f docker-compose.dev.yml up --build
 # API: http://localhost:8000, documentation: http://localhost:8000/docs
 # Without OCR (INSTALL_OCR=false); the full image with OCR is step 17.
+# Webhooks to the host (tools/webhook_receiver.py): callback_url http://host.docker.internal:9000/webhook,
+# QGEN_WEBHOOK_ALLOWED_HOSTS=host.docker.internal (README, "Webhooky").
 x-qgen: &qgen
   build:
     context: .
@@ -17,6 +19,8 @@ x-qgen: &qgen
     QGEN_REDIS_URL: redis://redis:6379/0
   volumes:
     - qgen-data:/data
+  extra_hosts:
+    - "host.docker.internal:host-gateway"   # Linux; Docker Desktop has it built in
   depends_on:
     redis:
       condition: service_healthy
@@ -42,6 +46,11 @@ services:
   worker:
     <<: *qgen
     command: ["python", "-m", "service.worker"]
+
+  # Delivers webhooks (queue "qgen-webhooks") and plans their retries; never waits for a job.
+  webhook-worker:
+    <<: *qgen
+    command: ["python", "-m", "service.webhook_worker"]
 
 volumes:
   qgen-data:

@@ -10,7 +10,13 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   Zápis atomicky (tmp súbor → fsync → rename). Pri štarte worker znova zaradí úlohy queued/running, ktoré nie sú vo fronte.
 - Webhook: `X-QGen-Timestamp` a podpis sa počítajú pri KAŽDOM pokuse nanovo; `X-QGen-Delivery` a `occurred_at` ostávajú.
 - `llm_error` je kód chyby úlohy (status failed), nie HTTP odpoveď API.
-- Opakovania webhookov cez RQ `enqueue_in` (worker s `--with-scheduler`), bez samostatného kontajnera scheduler.
+- Opakovania webhookov cez RQ `enqueue_in`, bez samostatného kontajnera scheduler.
+- Webhooky (krok 11): samostatná RQ fronta `qgen-webhooks` a kontajner `webhook-worker`
+  (rovnaký image, `python -m service.webhook_worker`, `with_scheduler=True`), aby doručenie
+  nečakalo na bežiacu úlohu. Odchýlka od spec (4 kontajnery namiesto 3). Najprv zápis
+  job.json, potom zaradenie webhooku s record z toho zápisu. job.cancelled posiela iba API
+  (DELETE), worker pri zrušení nič. worker_lost z recovery posiela job.failed.
+  /health hlási aj `webhook_worker`.
 - Čistenie HTML knižnicou `nh3`.
 
 ## Pravidlá
@@ -48,7 +54,8 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   cancelled, je normálne ukončenie – zalogovať (info), nie chyba.
 
 ## Požiadavky na ďalšie kroky (z kroku 10)
-- Krok 11 (webhooky): job.stage_changed pri zápise nového kroku v `ProgressWriter.write`
-  (service/jobs/runner.py), job.completed/failed/cancelled v koncových stavoch `JobRunner`.
-  Opakovania cez `enqueue_in` na tej istej fronte "qgen" (worker beží s `with_scheduler=True`).
 - Krok 14: `service/jobs/legacy_output.py` je dočasný – nahradiť skutočným krokom output.
+
+## Požiadavky na ďalšie kroky (z kroku 11)
+- Krok 13: nápovedy nesmú odkazovať na strany ani časti dokumentu („pozrite si stranu 14“) –
+  študent v ECEH PDF nemá. Nápoveda má navádzať obsahom.

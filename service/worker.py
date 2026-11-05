@@ -6,8 +6,10 @@ Start (kap. 3):
     1. check_config – a missing key / base_url stops the start (exit code 1)
     2. recovery: queued / running jobs that are not in the queue are queued again
     3. the periodic maintenance (cleanup + recovery) is scheduled
-    4. RQ worker with the built-in scheduler (--with-scheduler: maintenance, later the
-       webhook retries of step 11)
+    4. RQ worker with the built-in scheduler (--with-scheduler: maintenance)
+
+Webhooks are only queued here (queue "qgen-webhooks"); the webhook worker
+(service.webhook_worker, its own container) delivers them and plans their retries.
 
 RQ forks a work horse per job, so the worker runs only on Linux (Docker); tests use
 SimpleWorker.

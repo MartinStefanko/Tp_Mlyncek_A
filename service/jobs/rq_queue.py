@@ -73,7 +73,7 @@ class RqJobQueue:
         return bool(job.worker_name) and self.worker_alive(job.worker_name)
 
     def has_live_worker(self) -> bool:
-        return any(self.worker_alive(worker.name) for worker in Worker.all(queue=self.queue))
+        return queue_has_live_worker(self.queue)
 
     # --- helpers -------------------------------------------------------------------------
 
@@ -85,10 +85,7 @@ class RqJobQueue:
         return False
 
     def worker_alive(self, name: str) -> bool:
-        key = Worker.redis_worker_namespace_prefix + name
-        if not self.connection.exists(key):
-            return False
-        return not _text(self.connection.hget(key, "death"))
+        return worker_alive(self.connection, name)
 
     def _fetch(self, job_id: str) -> Optional[Job]:
         try:
@@ -108,3 +105,16 @@ class RqJobQueue:
         StartedJobRegistry(queue=self.queue).remove_executions(job)
         job.delete(remove_from_queue=True)
         logger.info("stale rq job removed job_id=%s", job_id)
+
+
+def worker_alive(connection: "redis.Redis", name: str) -> bool:
+    """The worker's Redis key exists (extended on every heartbeat) and has no death date."""
+    key = Worker.redis_worker_namespace_prefix + name
+    if not connection.exists(key):
+        return False
+    return not _text(connection.hget(key, "death"))
+
+
+def queue_has_live_worker(queue: Queue) -> bool:
+    """At least one live worker serves `queue` (also used for the webhook queue)."""
+    return any(worker_alive(queue.connection, worker.name) for worker in Worker.all(queue=queue))

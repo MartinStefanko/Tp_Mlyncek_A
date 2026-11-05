@@ -11,7 +11,7 @@ from qgen.contract import JobOptions, OptionDefaults, resolve_options
 from service.backend import CreateJobRequest, UploadedFile
 from service.mock.backend import MockFixtures
 
-from .conftest import API_KEY, PDF, assert_error, make_pdf
+from .conftest import API_KEY, CALLBACK_URL, PDF, assert_error, make_pdf
 
 pytestmark = pytest.mark.real_only
 
@@ -71,8 +71,14 @@ def test_flow_over_job_store(api):
 def test_health_reports_redis_and_worker(api, monkeypatch):
     assert api.client.get("/health").json() == {
         "status": "ok",
-        "components": {"api": "ok", "redis": "ok", "worker": "ok"},
+        "components": {"api": "ok", "redis": "ok", "worker": "ok", "webhook_worker": "ok"},
     }
+
+    api.real.events.worker_alive = False
+    response = api.client.get("/health")
+    assert response.status_code == 503
+    assert response.json()["components"]["webhook_worker"] == "error"
+    api.real.events.worker_alive = True
 
     api.real.queue.worker_alive = False
     response = api.client.get("/health")
@@ -295,6 +301,25 @@ def test_delete_when_worker_finished_meanwhile(api, monkeypatch):
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
     assert store.get(job_id).status == "completed"
+    assert api.real.events.sent == []  # the worker sends job.completed, not the API
+
+
+def test_cancel_sends_cancelled_with_the_written_state(api):
+    job_id = api.create_id({"external_ref": "gen-hook", "callback_url": CALLBACK_URL})
+    response = api.client.delete(f"/v1/jobs/{job_id}", headers=api.headers)
+    assert api.real.events.events() == ["job.cancelled"]
+    record = api.real.events.sent[0][1]
+    assert record.status == "cancelled" and record.updated_at == api.real.store.get(job_id).updated_at
+    assert response.json()["status"] == "cancelled"
+
+
+def test_delete_of_a_finished_job_and_retry_send_nothing(api):
+    job_id = api.create_id({"external_ref": "gen-hook", "callback_url": CALLBACK_URL})
+    api.fail(job_id)
+    assert api.client.post(f"/v1/jobs/{job_id}/retry", headers=api.headers).status_code == 202
+    api.finish(job_id)
+    assert api.client.delete(f"/v1/jobs/{job_id}", headers=api.headers).status_code == 204
+    assert api.real.events.sent == []
 
 
 # --- retry ----------------------------------------------------------------------------------

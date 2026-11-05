@@ -16,7 +16,7 @@ router = APIRouter()
 _AUTH_ERRORS: dict[int | str, dict[str, Any]] = {401: {"model": ErrorResponse, "description": "Missing or invalid X-API-Key."}}
 
 
-@router.get("/health", tags=["service"], summary="Service state (API, Redis, worker). No API key.")
+@router.get("/health", tags=["service"], summary="Service state (API, Redis, worker, webhook worker). No API key.")
 def health(backend: Backend) -> JSONResponse:
     components = backend.health()
     healthy = all(state in ("ok", "mock") for state in components.values())

@@ -295,8 +295,9 @@ heslo PDF a dostupnosť OCR. Úlohy spracuje worker. Spustenie: pozri časť
 
 ## Lokálne spustenie skutočnej služby
 
-Skutočná služba má tri kontajnery: `redis`, `api` (FastAPI) a `worker` (RQ). API a worker
-zdieľajú volume `/data` (job.json, PDF, výsledky). Worker spracuje úlohu celou pipeline a
+Skutočná služba má štyri kontajnery: `redis`, `api` (FastAPI), `worker` (RQ, pipeline) a
+`webhook-worker` (RQ, iba doručovanie webhookov). API a worker zdieľajú volume `/data`
+(job.json, PDF, výsledky). Worker spracuje úlohu celou pipeline a
 volá skutočné LLM API podľa `.env`. Obraz je zatiaľ bez OCR (`INSTALL_OCR=false`); úlohu s
 `extraction.ocr=true` API odmietne. RQ worker potrebuje `fork`, preto beží iba v Dockeri
 (Linux), nie priamo vo Windowse.
@@ -308,7 +309,8 @@ docker compose -f docker-compose.dev.yml up --build
 
 `QGEN_BACKEND=real`, `QGEN_DATA_DIR=/data` a `QGEN_REDIS_URL` nastaví compose sám.
 
-- `http://localhost:8000/health` vráti `"worker": "ok"`, keď beží aspoň jeden worker.
+- `http://localhost:8000/health` vráti `"worker": "ok"`, keď beží aspoň jeden worker, a
+  `"webhook_worker": "ok"`, keď beží webhook-worker.
 - `http://localhost:8000/docs`: pri **POST /v1/jobs** kliknite na *Try it out*. Do `files`
   pridajte `Hlavna_cast/ucebny_material/eko.pdf`. Do `options` zadajte napríklad
   `{"external_ref": "test-1"}`. Ak je nastavený `QGEN_API_KEYS`, vyplňte aj `x-api-key`.
@@ -326,6 +328,49 @@ curl -H "X-API-Key: <kluc>" http://localhost:8000/v1/jobs/<job_id>/result
 
 Logy workera: `docker compose -f docker-compose.dev.yml logs -f worker`.
 Zastavenie: `docker compose -f docker-compose.dev.yml down` (s `-v` zmaže aj dáta).
+
+### Webhooky
+
+Ak má úloha v options `callback_url`, služba naň pošle `job.stage_changed` (najviac raz na
+krok) a na konci `job.completed`, `job.failed` alebo `job.cancelled`. Worker (a pri DELETE
+API) najprv zapíše stav do job.json a potom zaradí webhook do fronty `qgen-webhooks`.
+Doručuje ho samostatný kontajner `webhook-worker`, preto nečaká na bežiacu úlohu. Ak
+odpoveď nie je 2xx do `QGEN_WEBHOOK_TIMEOUT_S`, skúsi to znova po 10 s, 60 s a 300 s. Potom
+doručenie vzdá (log `webhook gave up`); stav úlohy sa nemení. Hostiteľ sa kontroluje pri
+vytvorení úlohy aj pred každým pokusom.
+
+Vyskúšanie bez Laravelu:
+
+1. Do `.env` doplňte:
+
+   ```env
+   QGEN_WEBHOOK_ALLOWED_HOSTS=host.docker.internal
+   QGEN_WEBHOOK_SECRET=lokalny-tajny-kluc
+   ```
+
+2. Spustite službu (`docker compose -f docker-compose.dev.yml up --build`). Po zmene `.env`
+   reštartujte kontajnery (`up -d`), aby načítali nové hodnoty.
+3. Na počítači (mimo Dockeru) spustite prijímač. Tajný kľúč si načíta z `.env`:
+
+   ```bash
+   venv/Scripts/python.exe tools/webhook_receiver.py --port 9000
+   ```
+
+   `--fail 1` vráti na prvý webhook 500, takže uvidíte opakovanie po 10 s.
+4. Vytvorte úlohu s `callback_url` na `host.docker.internal`:
+
+   ```bash
+   curl -X POST http://localhost:8000/v1/jobs -H "X-API-Key: <kluc>" \
+     -F "files=@Hlavna_cast/ucebny_material/eko.pdf" \
+     -F 'options={"external_ref": "test-hook", "callback_url": "http://host.docker.internal:9000/webhook"}'
+   ```
+
+Prijímač vypíše každý webhook (udalosť, stav, krok, priebeh, výsledok kontroly podpisu) a
+odpovie 200, pri neplatnom podpise 401. `host.docker.internal` je adresa počítača z
+kontajnera (Docker Desktop ju má, v Linuxe ju pridáva `extra_hosts` v compose). Logy
+doručovania: `docker compose -f docker-compose.dev.yml logs -f webhook-worker`.
+
+### Časový limit a dočasný výstup
 
 Časový limit jednej úlohy je `QGEN_JOB_TIMEOUT_S` (predvolene 3600 s). Výstup `units` je
 zatiaľ dočasný: jedna hodina, všetky otázky typu `open` (krok 14 doplní nové typy a split).
