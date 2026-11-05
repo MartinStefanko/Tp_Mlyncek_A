@@ -18,6 +18,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Optional
 
 from rq import Queue, Worker
+from rq.defaults import DEFAULT_WORKER_TTL
 from rq.exceptions import NoSuchJobError
 from rq.job import Job, JobStatus
 from rq.registry import StartedJobRegistry
@@ -105,6 +106,19 @@ class RqJobQueue:
         StartedJobRegistry(queue=self.queue).remove_executions(job)
         job.delete(remove_from_queue=True)
         logger.info("stale rq job removed job_id=%s", job_id)
+
+
+def rq_worker_options(maintenance_interval_s: float) -> dict[str, int]:
+    """Options of rq.Worker for both workers, from QGEN_MAINTENANCE_INTERVAL_S.
+
+    After a worker is killed, its scheduler lock (61 s) blocks the scheduler of the new
+    worker; RQ takes the lock over only at its own maintenance, which runs between two
+    dequeues. An idle worker waits in a dequeue for worker_ttl - 15 s (405 s by default).
+    So both RQ's maintenance interval and that wait follow our interval; with the default
+    600 s the values are RQ's defaults (maintenance 600 s, worker_ttl 420 s).
+    """
+    interval = max(1, int(maintenance_interval_s))
+    return {"maintenance_interval": interval, "worker_ttl": min(DEFAULT_WORKER_TTL, interval + 15)}
 
 
 def worker_alive(connection: "redis.Redis", name: str) -> bool:

@@ -372,6 +372,47 @@ odpovie 200, pri neplatnom podpise 401. `host.docker.internal` je adresa počít
 kontajnera (Docker Desktop ju má, v Linuxe ju pridáva `extra_hosts` v compose). Logy
 doručovania: `docker compose -f docker-compose.dev.yml logs -f webhook-worker`.
 
+### Overenie odolnosti
+
+Skript `tools/resilience_check.py` overí odolnosť skutočnej služby v kontajneroch
+(špecifikácia, kap. 9: test odolnosti, test 202, test mazania). Nevolá LLM API: worker
+odpovedá z nahrávky `baseline_v3/llm_calls.jsonl` (override `docker-compose.replay.yml`,
+`QGEN_LLM_PROVIDER=replay`, `QGEN_EMBED_PROVIDER=replay`). Každé volanie je umelo spomalené
+(`QGEN_LLM_REPLAY_DELAY_S`, predvolene 1 s), aby sa dal kontajner zabiť počas behu.
+
+Potrebujete Docker, lokálnu nahrávku `baseline_v3/` a `eko.pdf` (v `tests/fixtures/` alebo
+`Hlavna_cast/ucebny_material/`). Porty 8000 a 9000 musia byť voľné. Skript sám spustí
+kontajnery, prijíma webhooky (port 9000) a na konci zavolá `docker compose down` (volume
+ostanú). Beží asi 15 minút, nie je súčasťou `pytest`.
+
+```bash
+venv/Scripts/python.exe tools/resilience_check.py                 # všetky scenáre
+venv/Scripts/python.exe tools/resilience_check.py --only b,d --keep-up
+```
+
+| Scenár | Postup | Očakávaný výsledok |
+|---|---|---|
+| a | reštart `api` a `redis` hneď po 202 | úloha dobehne `completed` |
+| a2 | worker stojí, po 202 `FLUSHALL` v Redise, štart workera | worker obnoví úlohu z job.json, `completed` |
+| b | `docker kill` workera počas `running`, štart | `completed`, `attempts` = 2 |
+| c | dvakrát kill počas behu | `failed` s `worker_lost`, webhook `job.failed`, PDF ostali |
+| d | DELETE počas behu | `cancelled`, `job.cancelled` práve raz, PDF zmazané, `/result` 409 |
+| e | `QGEN_LLM_REPLAY_FAIL=1` (zlyhá generovanie otázok) | `failed` s `llm_error`, PDF ostali; po vypnutí `POST /retry` → `completed`, rovnaké `job_id` |
+| f | opakovaný POST s rovnakým `external_ref` počas behu a po dokončení | 200, rovnaké `job_id` |
+| g | prijímač vráti 500, medzitým reštart `webhook-worker` | webhook doručený na 3. pokus, rovnaké `X-QGen-Delivery` |
+
+Na konci skript vypíše tabuľku OK/CHYBA. Ak niektorý scenár zlyhá, vráti exit kód 1.
+
+Úloha zabitého workera sa vráti do fronty až po vypršaní jeho kľúča v Redise (asi 90 s)
+a pri najbližšej údržbe. Replay compose preto nastaví `QGEN_MAINTENANCE_INTERVAL_S=15`
+(predvolene 600 s). Lehoty 24 h (PDF po `failed`) a 7 dní (výsledok) sa v kontajneroch
+čakať nedajú. Overujú ich unit testy s posunutými hodinami (`tests/worker/test_retention.py`,
+`tests/jobs/test_cleanup.py`).
+
+Replay je iba na vývoj. Worker pri štarte zapíše do logu výrazné varovanie `REPLAY` a
+`GET /v1/info` ukáže `"llm_provider": "replay"` a `"replay": true`. So službou v režime
+replay funguje iba `eko.pdf` bez OCR. Pri inom dokumente úloha skončí `llm_error`.
+
 ### Časový limit a dočasný výstup
 
 Časový limit jednej úlohy je `QGEN_JOB_TIMEOUT_S` (predvolene 3600 s). Výstup `units` je

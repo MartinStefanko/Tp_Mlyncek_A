@@ -213,3 +213,14 @@ def test_health_info_docs(api):
         "/v1/schema/report",
     }
     assert set(paths["/v1/jobs/{job_id}"]) == {"get", "delete"}
+
+
+def test_info_shows_the_providers_and_replay(api_factory, tmp_path):
+    """A replay deployed by mistake is visible in /v1/info without reading the logs."""
+    body = api_factory().client.get("/v1/info", headers={"X-API-Key": "test-key"}).json()
+    assert (body["models"]["llm_provider"], body["models"]["embed_provider"]) == ("gemini", "gemini")
+    assert body["models"]["replay"] is False
+
+    api = api_factory(llm_provider="replay", embed_provider="replay", llm_replay_path=tmp_path / "calls.jsonl")
+    models = api.client.get("/v1/info", headers=api.headers).json()["models"]
+    assert (models["llm_provider"], models["embed_provider"], models["replay"]) == ("replay", "replay", True)

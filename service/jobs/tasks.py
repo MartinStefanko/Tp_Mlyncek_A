@@ -5,7 +5,9 @@ WorkerContext set by service.worker at start (`configure`); without one (e.g. a 
 `rq worker`), the context is built from the environment on first use. Tests call
 `configure` with fake clients.
 
-Maintenance (every MAINTENANCE_INTERVAL_S, scheduled by RQ `enqueue_in`, run by the
+Maintenance (every QGEN_MAINTENANCE_INTERVAL_S, default 600 s; shorter only in development,
+e.g. docker-compose.replay.yml, so a killed worker's job comes back within about two
+minutes; scheduled by RQ `enqueue_in`, run by the
 scheduler built into the worker, `--with-scheduler`):
     - run_cleanup (PDF deletion, deletion after QGEN_RESULT_TTL_DAYS incl. external_ref)
     - recover_jobs (jobs lost while the worker kept running: a killed work horse, or a
@@ -37,7 +39,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("qgen.worker")
 
 MAINTENANCE_TASK = "service.jobs.tasks.run_maintenance"
-MAINTENANCE_INTERVAL_S = 600
+MAINTENANCE_INTERVAL_S = 600  # default of QGEN_MAINTENANCE_INTERVAL_S
 MAINTENANCE_ID_PREFIX = "qgen-maintenance-"
 MAINTENANCE_LOCK_KEY = "qgen:lock:maintenance"
 RECOVERY_LOCK_KEY = "qgen:lock:recovery"
@@ -130,16 +132,17 @@ def recover_at_start(context: WorkerContext) -> Optional[RecoveryResult]:
     return result
 
 
-def maintenance_job_id(now_s: float) -> str:
-    slot = int(now_s // MAINTENANCE_INTERVAL_S) + 1
+def maintenance_job_id(now_s: float, interval_s: float = MAINTENANCE_INTERVAL_S) -> str:
+    slot = int(now_s // interval_s) + 1
     return f"{MAINTENANCE_ID_PREFIX}{slot}"
 
 
 def schedule_maintenance(context: WorkerContext) -> str:
     """Schedule the next maintenance run in the next slot (same id for every worker)."""
     now_s = context.wall_clock()
-    job_id = maintenance_job_id(now_s)
-    slot_start = (int(now_s // MAINTENANCE_INTERVAL_S) + 1) * MAINTENANCE_INTERVAL_S
+    interval_s = context.settings.maintenance_interval_s
+    job_id = maintenance_job_id(now_s, interval_s)
+    slot_start = (int(now_s // interval_s) + 1) * interval_s
     delay = max(1.0, slot_start - now_s)
     context.queue.queue.enqueue_in(
         timedelta(seconds=delay),

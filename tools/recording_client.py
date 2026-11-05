@@ -3,7 +3,7 @@
 `RecordingClient` implements `qgen.llm.base.LLMClient` and `EmbeddingClient`, delegates
 every call to the real clients (from qgen.llm.factory) and appends one JSON line per call
 to a JSONL file. Since step 6 it wraps the interface, not `genai.Client`; the file format
-is unchanged, so old recordings stay valid for tests/replay_client.py.
+is unchanged, so old recordings stay valid for qgen/llm/adapters/replay.py.
 
 Each record contains:
     seq, method ("generate_content" | "embed_content"), model, contents (input),

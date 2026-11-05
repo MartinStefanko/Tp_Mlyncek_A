@@ -71,7 +71,19 @@ def describe(body: bytes) -> str:
     return " ".join(parts)
 
 
-def make_handler(secret: str, fail: int = 0, out: Callable[[str], None] = print) -> type[BaseHTTPRequestHandler]:
+def make_handler(
+    secret: str,
+    fail: int = 0,
+    out: Callable[[str], None] = print,
+    *,
+    fail_when: Optional[Callable[[dict], bool]] = None,
+    on_webhook: Optional[Callable[[dict], None]] = None,
+) -> type[BaseHTTPRequestHandler]:
+    """`fail`: answer 500 to the first N valid webhooks.
+    `fail_when(payload)`: answer 500 to a valid webhook when it returns True (checked after
+    `fail`; used by tools/resilience_check.py to fail one job only).
+    `on_webhook(info)`: called for every webhook with event, delivery, timestamp, valid,
+    code and the parsed body (payload, None when not JSON)."""
     state = {"fail": fail}
     lock = threading.Lock()
 
@@ -86,11 +98,27 @@ def make_handler(secret: str, fail: int = 0, out: Callable[[str], None] = print)
                 now=int(time.time()),
                 max_age_s=MAX_AGE_S,
             )
+            try:
+                payload = json.loads(body)
+            except ValueError:
+                payload = None
             with lock:
                 failing = valid and state["fail"] > 0
                 if failing:
                     state["fail"] -= 1
+                elif valid and fail_when is not None and isinstance(payload, dict):
+                    failing = bool(fail_when(payload))
             code = 401 if not valid else 500 if failing else 200
+            if on_webhook is not None:
+                on_webhook({
+                    "event": self.headers.get(HEADER_EVENT),
+                    "delivery": self.headers.get(HEADER_DELIVERY),
+                    "timestamp": self.headers.get(HEADER_TIMESTAMP),
+                    "valid": valid,
+                    "code": code,
+                    "payload": payload,
+                    "received_at": time.time(),
+                })
             out(
                 f"{datetime.now():%H:%M:%S} {self.headers.get(HEADER_EVENT)} "
                 f"delivery={self.headers.get(HEADER_DELIVERY)} ts={self.headers.get(HEADER_TIMESTAMP)} "
@@ -107,9 +135,14 @@ def make_handler(secret: str, fail: int = 0, out: Callable[[str], None] = print)
 
 
 def make_server(
-    port: int, secret: str, fail: int = 0, out: Callable[[str], None] = print, host: str = "0.0.0.0"
+    port: int,
+    secret: str,
+    fail: int = 0,
+    out: Callable[[str], None] = print,
+    host: str = "0.0.0.0",
+    **handler_options,
 ) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(secret, fail, out))
+    return ThreadingHTTPServer((host, port), make_handler(secret, fail, out, **handler_options))
 
 
 def main(argv: Optional[list[str]] = None) -> int:

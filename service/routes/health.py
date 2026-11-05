@@ -40,7 +40,16 @@ def health(backend: Backend) -> JSONResponse:
     )
 
 
-@router.get("/v1/info", tags=["service"], summary="Service version, models and limits.", responses=_AUTH_ERRORS)
+@router.get(
+    "/v1/info",
+    tags=["service"],
+    summary="Service version, models and limits.",
+    description=(
+        'models.llm_provider and models.embed_provider are the providers in use; "replay" means '
+        "answers from a recording (development only) and sets models.replay to true."
+    ),
+    responses=_AUTH_ERRORS,
+)
 def info(settings: Settings, _owner: Owner) -> dict[str, Any]:
     return {
         "service": "qgen",
@@ -51,6 +60,7 @@ def info(settings: Settings, _owner: Owner) -> dict[str, Any]:
             "llm_model": settings.llm_model,
             "embed_provider": settings.embed_provider,
             "embed_model": settings.embed_model,
+            "replay": "replay" in (settings.llm_provider, settings.embed_provider),
         },
         "limits": {
             "max_files": settings.max_files,

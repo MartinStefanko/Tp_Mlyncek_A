@@ -19,6 +19,12 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   /health: HTTP 503 iba pri nedostupnom Redise, inak 200; stav workerov iba v tele
   (`status` ok/degraded, `webhook_worker` "disabled" pri vypnutých webhookoch).
 - Čistenie HTML knižnicou `nh3`.
+- Replay poskytovateľ (krok 12): `QGEN_LLM_PROVIDER/QGEN_EMBED_PROVIDER=replay` iba na vývoj;
+  check_config ho neodmieta, ale vždy varuje (bez QGEN_ENV); /v1/info ukazuje poskytovateľov
+  a `models.replay`. `QGEN_MAINTENANCE_INTERVAL_S` (predvolene 600) skracuje údržbu pre dev
+  (replay compose 15 s), inak by úloha zabitého workera čakala na obnovu až 10 min. Podľa neho
+  sa nastaví aj `maintenance_interval` a `worker_ttl` RQ (`rq_worker_options`; pri 600 s
+  predvolené hodnoty RQ), lebo zámok plánovača zabitého workera RQ prevezme až pri svojej údržbe.
 
 ## Pravidlá
 - Python 3.12, pytest. Testy NIKDY nevolajú skutočné LLM ani embedding API – používajú falošný/replay klient.

@@ -35,10 +35,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from qgen.contract.options import OptionDefaults
 
-LlmProvider = Literal["gemini", "openai_compatible", "anthropic"]
+# "replay" answers from a recording (qgen.llm.adapters.replay); development and tests only.
+LlmProvider = Literal["gemini", "openai_compatible", "anthropic", "replay"]
 # "anthropic" is accepted here only so that qgen.llm.factory can reject it with a clear
 # message (Anthropic has no embedding API) instead of a generic validation error.
-EmbedProvider = Literal["gemini", "openai_compatible", "anthropic"]
+EmbedProvider = Literal["gemini", "openai_compatible", "anthropic", "replay"]
 ROLE_MODEL_FIELDS = ("llm_model_lo", "llm_model_questions", "llm_model_eval")
 
 
@@ -80,6 +81,11 @@ class Settings(BaseSettings):
         default=3.0, ge=0, description="Wait between attempts; base of the exponential wait on HTTP 429."
     )
     llm_timeout_s: float = Field(default=120, gt=0, description="Client timeout of one LLM / embedding call.")
+
+    # --- Replay (development only: QGEN_LLM_PROVIDER / QGEN_EMBED_PROVIDER = replay) -----
+    llm_replay_path: Optional[Path] = Field(default=None, description="Recording llm_calls.jsonl.")
+    llm_replay_delay_s: float = Field(default=0, ge=0, description="Sleep before every replayed call.")
+    llm_replay_fail: bool = Field(default=False, description="Question generation fails (llm_error).")
 
     # --- Embeddings ------------------------------------------------------------------
     embed_provider: EmbedProvider = "gemini"
@@ -130,6 +136,9 @@ class Settings(BaseSettings):
 
     # --- Queue -------------------------------------------------------------------------
     redis_url: str = Field(default="redis://redis:6379/0", description="Queue, progress cache, external_ref reservations.")
+    maintenance_interval_s: float = Field(
+        default=600, ge=5, description="Worker maintenance (cleanup + recovery); shorter only for development."
+    )
     job_timeout_s: float = Field(
         default=3600, gt=0, description="Time limit of one job run in the worker (eko.pdf takes about 290 s)."
     )

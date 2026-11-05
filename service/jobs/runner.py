@@ -65,7 +65,7 @@ STAGE_ORDER: tuple[str, ...] = (*PIPELINE_STAGES, "output")
 
 # --- stop signals ---------------------------------------------------------------------------
 # BaseException on purpose: `except Exception` in the pipeline or the retry layer must not
-# swallow them (same reason as tests.replay_client.UnrecordedCallError).
+# swallow them (same reason as qgen.llm.adapters.replay.UnrecordedCallError).
 
 
 class JobStop(BaseException):

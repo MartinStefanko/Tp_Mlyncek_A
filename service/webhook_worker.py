@@ -12,6 +12,7 @@ import logging
 import sys
 from typing import Optional
 
+from service.jobs.rq_queue import rq_worker_options
 from service.settings import ServiceSettings
 from service.webhooks import rq_delivery
 
@@ -33,7 +34,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     context = rq_delivery.build_context(settings, client)
     rq_delivery.configure(context)
     logger.info("webhook worker started queue=%s timeout_s=%g", context.queue.name, settings.webhook_timeout_s)
-    Worker([context.queue], connection=client).work(with_scheduler=True)
+    # Same as the job worker: after a crash the dead worker's scheduler lock is taken over
+    # soon, then the planned retries go on (service.jobs.rq_queue.rq_worker_options).
+    options = rq_worker_options(settings.maintenance_interval_s)
+    Worker([context.queue], connection=client, **options).work(with_scheduler=True)
     return 0
 
 

@@ -1,0 +1,47 @@
+# Development only: the real service answers LLM / embedding calls from the recording
+# baseline_v3/llm_calls.jsonl (eko.pdf) instead of an API. No key, no cost, same result.
+#   docker compose -f docker-compose.dev.yml -f docker-compose.replay.yml up --build
+# Used by tools/resilience_check.py (README, "Overenie odolnosti"). The worker logs a loud
+# REPLAY warning at start and /v1/info shows "replay": true. NEVER in production.
+#
+# Only a job with eko.pdf (without OCR) matches the recording; another document fails
+# with llm_error ("call is not in the recording").
+# Variables (from the shell, defaults below):
+#   QGEN_LLM_REPLAY_DELAY_S       sleep before every call (kill a container during a run)
+#   QGEN_LLM_REPLAY_FAIL          1 = question generation fails (llm_error), to test retry
+#   QGEN_MAINTENANCE_INTERVAL_S   maintenance (cleanup + recovery); 15 s here, 600 s by default
+x-replay-env: &replay-env
+  QGEN_LLM_PROVIDER: replay
+  QGEN_EMBED_PROVIDER: replay
+  QGEN_LLM_REPLAY_PATH: /replay/llm_calls.jsonl
+  QGEN_LLM_REPLAY_DELAY_S: ${QGEN_LLM_REPLAY_DELAY_S:-1}
+  QGEN_LLM_REPLAY_FAIL: ${QGEN_LLM_REPLAY_FAIL:-0}
+  QGEN_MAINTENANCE_INTERVAL_S: ${QGEN_MAINTENANCE_INTERVAL_S:-15}
+  # The models and pipeline settings of the recording (code defaults; a value in .env must
+  # not change the prompts).
+  QGEN_LLM_MODEL: gemini-3.1-flash-lite
+  QGEN_LLM_MODEL_LO: gemini-3.1-flash-lite
+  QGEN_LLM_MODEL_QUESTIONS: gemini-3.1-flash-lite
+  QGEN_LLM_MODEL_EVAL: gemini-3.5-flash
+  QGEN_EMBED_MODEL: gemini-embedding-001
+  QGEN_OCR_ENABLED: "false"
+  # Fixed development values (not secrets) so the check knows the API key and the secret.
+  QGEN_API_KEYS: ${QGEN_REPLAY_API_KEY:-replay-dev-key}
+  QGEN_WEBHOOK_SECRET: ${QGEN_REPLAY_WEBHOOK_SECRET:-replay-dev-secret}
+  QGEN_WEBHOOK_ALLOWED_HOSTS: host.docker.internal
+  QGEN_MAX_ACTIVE_JOBS: "10"
+
+x-replay-volumes: &replay-volumes
+  - qgen-data:/data
+  - ./baseline_v3:/replay:ro
+
+services:
+  api:
+    environment: *replay-env
+    volumes: *replay-volumes
+  worker:
+    environment: *replay-env
+    volumes: *replay-volumes
+  webhook-worker:
+    environment: *replay-env
+    volumes: *replay-volumes

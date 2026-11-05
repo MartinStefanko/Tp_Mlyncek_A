@@ -12,8 +12,8 @@ Roles and the model setting each one uses:
 QGEN_LLM_MODEL_LO / _QUESTIONS / _EVAL inherit QGEN_LLM_MODEL when not set (qgen.config).
 
 Providers:
-    QGEN_LLM_PROVIDER    gemini | openai_compatible | anthropic       -> get_llm(role, settings)
-    QGEN_EMBED_PROVIDER  gemini | openai_compatible                   -> get_embedder(settings)
+    QGEN_LLM_PROVIDER    gemini | openai_compatible | anthropic | replay  -> get_llm(role, settings)
+    QGEN_EMBED_PROVIDER  gemini | openai_compatible | replay           -> get_embedder(settings)
 The two are independent, e.g. vLLM for generation and Gemini for embeddings.
 
 What each provider needs (checked by check_config at start, and again by get_llm /
@@ -23,6 +23,10 @@ get_embedder before a client is built):
                        keys optional (a local server needs none): QGEN_LLM_API_KEY for the
                        LLM, QGEN_EMBED_API_KEY for embeddings (empty = QGEN_LLM_API_KEY)
     anthropic          ANTHROPIC_API_KEY; LLM only (no embedding API)
+    replay             QGEN_LLM_REPLAY_PATH (an existing recording, e.g. baseline_v3/llm_calls.jsonl);
+                       development only: answers from the recording (qgen.llm.adapters.replay).
+                       Never refused, but check_config logs a loud warning every time. One
+                       client serves both roles when LLM and embeddings are replay.
 A provider other than gemini with a model whose name starts with GEMINI_MODEL_PREFIX is
 rejected too: the usual mistake after switching QGEN_LLM_PROVIDER without changing the
 models. The same holds for QGEN_EMBED_PROVIDER and QGEN_EMBED_MODEL.
@@ -34,7 +38,9 @@ key below) and shared by all roles and calls.
 
 from __future__ import annotations
 
+import logging
 import threading
+from pathlib import Path
 from typing import Any, Callable
 
 from qgen.config import ROLE_MODEL_FIELDS, Settings
@@ -53,10 +59,14 @@ ROLE_MODEL_SETTING = {
 ROLES = tuple(ROLE_MODEL_SETTING)
 EMBED_ROLE = "embed"  # role name in LLMError for embedding calls
 GEMINI_MODEL_PREFIX = "gemini-"
+REPLAY = "replay"
+
+logger = logging.getLogger("qgen.llm")
 
 _lock = threading.Lock()
 _llm_cache: dict[tuple, LLMClient] = {}
 _embedder_cache: dict[tuple, EmbeddingClient] = {}
+_replay_cache: dict[tuple, Any] = {}
 
 
 def _env_name(field: str) -> str:
@@ -97,10 +107,12 @@ def llm_config_problems(settings: Settings) -> list[str]:
     elif provider == "anthropic":
         if not settings.anthropic_api_key.get_secret_value():
             problems.append("QGEN_LLM_PROVIDER=anthropic needs ANTHROPIC_API_KEY.")
+    elif provider == REPLAY:
+        problems.extend(_replay_problems(settings, "QGEN_LLM_PROVIDER"))
     else:  # pragma: no cover - Settings validates the Literal
         problems.append(f"Unknown QGEN_LLM_PROVIDER={provider!r}.")
 
-    if provider != "gemini":
+    if provider not in ("gemini", REPLAY):  # a recording of Gemini has Gemini models
         base = settings.llm_model
         if base.startswith(GEMINI_MODEL_PREFIX):
             problems.append(
@@ -135,15 +147,52 @@ def embed_config_problems(settings: Settings) -> list[str]:
             "QGEN_EMBED_PROVIDER=anthropic is not possible: Anthropic has no embedding API. "
             "Use QGEN_EMBED_PROVIDER=gemini (GEMINI_API_KEY) or openai_compatible (QGEN_EMBED_BASE_URL)."
         )
+    elif provider == REPLAY:
+        problems.extend(_replay_problems(settings, "QGEN_EMBED_PROVIDER"))
     else:  # pragma: no cover - Settings validates the Literal
         problems.append(f"Unknown QGEN_EMBED_PROVIDER={provider!r}.")
 
-    if provider not in ("gemini", "anthropic") and settings.embed_model.startswith(GEMINI_MODEL_PREFIX):
+    if provider not in ("gemini", "anthropic", REPLAY) and settings.embed_model.startswith(GEMINI_MODEL_PREFIX):
         problems.append(
             f"QGEN_EMBED_MODEL={settings.embed_model} is a Gemini model, but QGEN_EMBED_PROVIDER={provider}. "
             f"Set QGEN_EMBED_MODEL to an embedding model of the server."
         )
     return problems
+
+
+def _replay_problems(settings: Settings, variable: str) -> list[str]:
+    path = settings.llm_replay_path
+    if path is None or not str(path):
+        return [f"{variable}=replay needs QGEN_LLM_REPLAY_PATH (a recording llm_calls.jsonl)."]
+    if not Path(path).is_file():
+        return [f"{variable}=replay: recording QGEN_LLM_REPLAY_PATH={path} does not exist."]
+    return []
+
+
+def replay_in_use(settings: Settings, *, llm: bool = True, embedder: bool = True) -> list[str]:
+    """Names of the variables that select replay (empty list = no replay)."""
+    used = []
+    if llm and settings.llm_provider == REPLAY:
+        used.append("QGEN_LLM_PROVIDER")
+    if embedder and settings.embed_provider == REPLAY:
+        used.append("QGEN_EMBED_PROVIDER")
+    return used
+
+
+def warn_replay(settings: Settings, *, llm: bool = True, embedder: bool = True) -> bool:
+    """Loud warning when replay is selected: it is for development only. True if warned."""
+    used = replay_in_use(settings, llm=llm, embedder=embedder)
+    if not used:
+        return False
+    bar = "!" * 78
+    logger.warning(
+        "\n%s\n!!! REPLAY: %s=replay. Answers come from the recording %s, not from an LLM.\n"
+        "!!! Development and tests only. NEVER in production. /v1/info shows the providers.\n"
+        "!!! delay_s=%g fail_questions=%s\n%s",
+        bar, "=replay, ".join(used), settings.llm_replay_path, settings.llm_replay_delay_s,
+        settings.llm_replay_fail, bar,
+    )
+    return True
 
 
 def _raise_if(problems: list[str]) -> None:
@@ -164,6 +213,7 @@ def check_config(settings: Settings, *, llm: bool = True, embedder: bool = True)
         embed_config_problems(settings) if embedder else []
     )
     _raise_if(problems)
+    warn_replay(settings, llm=llm, embedder=embedder)
     if llm:
         get_llm(ROLES[0], settings)
     if embedder:
@@ -218,6 +268,9 @@ def get_llm(role: str, settings: Settings) -> LLMClient:
 
         return _cached(_llm_cache, (provider, key, timeout, max_tokens), build)
 
+    if provider == REPLAY:
+        return _replay_client(settings)
+
     raise LLMConfigError(f"Unknown QGEN_LLM_PROVIDER={provider!r}.")  # pragma: no cover
 
 
@@ -249,10 +302,26 @@ def get_embedder(settings: Settings) -> EmbeddingClient:
 
         return _cached(_embedder_cache, (provider, base_url, key, timeout), build)
 
+    if provider == REPLAY:
+        return _replay_client(settings)
+
     raise LLMConfigError(f"Unknown QGEN_EMBED_PROVIDER={provider!r}.")  # pragma: no cover
+
+
+def _replay_client(settings: Settings) -> Any:
+    """One ReplayLLM per recording and options, shared by the LLM and the embedding role."""
+    path, delay, fail = str(settings.llm_replay_path), settings.llm_replay_delay_s, settings.llm_replay_fail
+
+    def build():
+        from qgen.llm.adapters.replay import ReplayLLM
+
+        return ReplayLLM(path, delay_s=delay, fail_questions=fail)
+
+    return _cached(_replay_cache, (path, delay, fail), build)
 
 
 def clear_cache() -> None:
     with _lock:
         _llm_cache.clear()
         _embedder_cache.clear()
+        _replay_cache.clear()

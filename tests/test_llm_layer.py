@@ -23,7 +23,7 @@ from tests.fakes import (
     server_error,
     timed_out,
 )
-from tests.replay_client import ReplayClient
+from qgen.llm.adapters.replay import ReplayClient
 
 SEGMENTS = [
     {"page": 1, "source_id": "D1", "source_name": "a.pdf", "text": "Fotosyntéza je proces v rastlinách."},

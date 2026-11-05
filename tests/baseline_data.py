@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from qgen.config import Settings
-from tests.replay_client import ReplayClient
+from qgen.llm.adapters.replay import ReplayClient
 
 BASELINE_DIR = Path(__file__).resolve().parent.parent / "baseline_v3"
 REQUIRED_FILES = (

@@ -6,7 +6,8 @@ Start (kap. 3):
     1. check_config – a missing key / base_url stops the start (exit code 1)
     2. recovery: queued / running jobs that are not in the queue are queued again
     3. the periodic maintenance (cleanup + recovery) is scheduled
-    4. RQ worker with the built-in scheduler (--with-scheduler: maintenance)
+    4. RQ worker with the built-in scheduler (--with-scheduler: maintenance); RQ's own
+       maintenance interval = QGEN_MAINTENANCE_INTERVAL_S
 
 Webhooks are only queued here (queue "qgen-webhooks"); the webhook worker
 (service.webhook_worker, its own container) delivers them and plans their retries.
@@ -22,6 +23,7 @@ from typing import Optional
 from qgen.llm.errors import LLMConfigError
 from qgen.llm.factory import check_config
 from service.jobs import tasks
+from service.jobs.rq_queue import rq_worker_options
 from service.settings import ServiceSettings
 
 logger = logging.getLogger("qgen.worker")
@@ -45,7 +47,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     tasks.recover_at_start(context)
     tasks.schedule_maintenance(context)
     logger.info("worker started queue=%s job_timeout_s=%g", context.queue.queue.name, settings.job_timeout_s)
-    Worker([context.queue.queue], connection=client).work(with_scheduler=True)
+    options = rq_worker_options(settings.maintenance_interval_s)  # scheduler lock of a killed worker
+    Worker([context.queue.queue], connection=client, **options).work(with_scheduler=True)
     return 0
 
 

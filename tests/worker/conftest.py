@@ -195,14 +195,17 @@ class WorkerEnv:
         for name, value in runner_fields.items():
             setattr(self.context.runner, name, value)
 
-    def create(self, options: Optional[dict] = None, pdf: bytes = b"", name: str = "bio.pdf") -> str:
+    def create_response(self, options: Optional[dict] = None, pdf: bytes = b"", name: str = "bio.pdf") -> httpx.Response:
         data = {"options": json.dumps(options)} if options is not None else {}
-        response = self.client.post(
+        return self.client.post(
             "/v1/jobs",
             headers=HEADERS,
             files=[("files", (name, pdf or make_pdf(3), "application/pdf"))],
             data=data,
         )
+
+    def create(self, options: Optional[dict] = None, pdf: bytes = b"", name: str = "bio.pdf") -> str:
+        response = self.create_response(options, pdf, name)
         assert response.status_code == 202, response.text
         return response.json()["job_id"]
 
