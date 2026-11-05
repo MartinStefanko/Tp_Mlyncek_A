@@ -80,7 +80,51 @@ def create_app(settings: Optional[ServiceSettings] = None, backend: Optional[Job
     install_error_handlers(app)
     app.include_router(health.router)
     app.include_router(jobs.router)
+    install_file_upload_schema(app)
     return app
+
+
+def install_file_upload_schema(app: FastAPI) -> None:
+    """Show upload fields as file pickers in /docs.
+
+    FastAPI (OpenAPI 3.1) describes the optional file lists as
+    anyOf[array of {type: string, contentMediaType: application/octet-stream} (or an anyOf
+    with plain string), null]. Swagger UI renders that as text inputs. The fields `files` and `files[]` become
+    {type: array, items: {type: string, format: binary, example: ""}}; the endpoint does not change.
+    Without the empty example Swagger UI keeps its sample value "string" for a file field
+    left untouched and sends it as text (422); with it, it sends an empty part, which the
+    route ignores (service.routes.jobs._uploads).
+    """
+    build = app.openapi
+
+    def openapi() -> dict:
+        if app.openapi_schema is None:
+            schema = build()
+            for component in schema.get("components", {}).get("schemas", {}).values():
+                for name, prop in component.get("properties", {}).items():
+                    if _is_file_list(prop):
+                        component["properties"][name] = {
+                            key: value for key, value in prop.items() if key in ("title", "description")
+                        } | {"type": "array", "items": {"type": "string", "format": "binary", "example": ""}}
+            app.openapi_schema = schema
+        return app.openapi_schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
+
+
+def _is_file_list(prop: dict) -> bool:
+    """An array whose items are (or may be) a file. The route types the items as
+    UploadFile | str (empty text parts from Swagger UI), so items may be an anyOf."""
+    return any(
+        variant.get("type") == "array" and any(_is_file(item) for item in variant.get("items", {}).get("anyOf", [variant.get("items", {})]))
+        for variant in prop.get("anyOf", [prop])
+    )
+
+
+def _is_file(item: dict) -> bool:
+    return item.get("type") == "string" and (
+        item.get("contentMediaType") == "application/octet-stream" or item.get("format") == "binary"
+    )
 
 
 _default_app: Optional[FastAPI] = None
