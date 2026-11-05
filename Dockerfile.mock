@@ -7,8 +7,10 @@ WORKDIR /app
 COPY requirements-mock.txt ./
 RUN pip install --no-cache-dir -r requirements-mock.txt
 
-# Only the contract is needed from qgen (no pipeline modules).
+# Only the contract and central config are needed from qgen (no pipeline modules).
+# service/settings.py imports qgen.config; it depends only on pydantic and qgen.contract.
 COPY qgen/__init__.py qgen/__init__.py
+COPY qgen/config.py qgen/config.py
 COPY qgen/contract/ qgen/contract/
 COPY service/ service/
 
