@@ -1,10 +1,11 @@
 """Job endpoints (Príloha A). Routes check the request and call the JobBackend."""
 
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Optional, Union
 
 from fastapi import APIRouter, File, Form, Query, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from qgen.contract import CreateJobResponse, ErrorResponse, JobLinks, JobListResponse, JobStatus, Report, UnitsResult
 from service.backend import CreateJobRequest
@@ -19,6 +20,28 @@ def _errors(*codes: tuple[int, str]) -> dict[int | str, dict[str, Any]]:
     for status, description in codes:
         result[status] = {"model": ErrorResponse, "description": description}
     return result
+
+
+def _uploads(values: Optional[list[Union[UploadFile, str]]], field: str) -> list[UploadFile]:
+    """The files of one form field. Empty text parts are skipped; other text is a 422 as before."""
+    found: list[UploadFile] = []
+    for index, value in enumerate(values or []):
+        if isinstance(value, StarletteUploadFile):
+            found.append(value)
+        elif isinstance(value, str) and value.strip() == "":
+            continue
+        else:
+            raise RequestValidationError(
+                [
+                    {
+                        "type": "value_error",
+                        "loc": ("body", field, index),
+                        "msg": f"Value error, Expected UploadFile, received: {type(value)}",
+                        "input": None,
+                    }
+                ]
+            )
+    return found
 
 
 def _links(job_id: str) -> JobLinks:
@@ -46,13 +69,18 @@ async def create_job(
     backend: Backend,
     settings: Settings,
     owner: Owner,
-    files: Annotated[Optional[list[UploadFile]], File(description="PDF files (field name 'files').")] = None,
+    # Union with str: Swagger UI sends an empty text part for an empty file field
+    # (-F 'files[]='); such parts are ignored as if the field were missing (_uploads).
+    files: Annotated[
+        Optional[list[Union[UploadFile, str]]], File(description="PDF files (field name 'files').")
+    ] = None,
     files_brackets: Annotated[
-        Optional[list[UploadFile]], File(alias="files[]", description="PDF files (field name 'files[]', e.g. from Laravel).")
+        Optional[list[Union[UploadFile, str]]],
+        File(alias="files[]", description="PDF files (field name 'files[]', e.g. from Laravel)."),
     ] = None,
     options: Annotated[Optional[str], Form(description="JSON string with options; all fields optional.")] = None,
 ) -> CreateJobResponse:
-    uploads = [*(files or []), *(files_brackets or [])]
+    uploads = [*_uploads(files, "files"), *_uploads(files_brackets, "files[]")]
     if not uploads:
         raise RequestValidationError(
             [{"type": "missing", "loc": ("body", "files"), "msg": "Field required", "input": None}]

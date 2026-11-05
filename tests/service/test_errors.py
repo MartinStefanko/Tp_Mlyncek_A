@@ -156,6 +156,43 @@ def test_missing_files_is_validation_error(api):
     assert error["details"]["errors"][0]["loc"] == ["body", "files"]
 
 
+# Swagger UI sends an empty text part for a file field left empty (curl -F 'files[]=').
+# multipart parts with filename None are text parts.
+EMPTY_FILES = ("files", (None, b""))
+EMPTY_FILES_BRACKETS = ("files[]", (None, b""))
+
+
+@pytest.mark.parametrize("empty", [EMPTY_FILES, EMPTY_FILES_BRACKETS, None], ids=["files", "files[]", "both"])
+def test_only_empty_text_parts_is_missing_files(api, empty):
+    parts = [empty] if empty else [EMPTY_FILES, EMPTY_FILES_BRACKETS]
+    response = api.client.post("/v1/jobs", headers=api.headers, files=[*parts, ("options", (None, b"{}"))])
+    error = assert_error(response, 422, "validation_error")
+    assert error["details"]["errors"][0]["loc"] == ["body", "files"]
+    assert api.job_count() == 0
+
+
+def test_file_in_files_and_empty_files_brackets(api):
+    response = api.client.post("/v1/jobs", headers=api.headers, files=[*PDF_FILE, EMPTY_FILES_BRACKETS])
+    assert response.status_code == 202, response.text
+    assert api.stored_files(response.json()["job_id"]) == [("eko.pdf", len(PDF))]
+
+
+def test_file_in_files_brackets_and_empty_files(api):
+    files = [EMPTY_FILES, ("files[]", ("eko.pdf", PDF, "application/pdf"))]
+    response = api.client.post("/v1/jobs", headers=api.headers, files=files)
+    assert response.status_code == 202, response.text
+
+
+@pytest.mark.parametrize("field", ["files", "files[]"])
+def test_text_instead_of_a_file_is_validation_error(api, field):
+    response = api.client.post("/v1/jobs", headers=api.headers, files=[*PDF_FILE, (field, (None, b"not a file"))])
+    error = assert_error(response, 422, "validation_error")
+    loc = error["details"]["errors"][0]["loc"]
+    assert loc[:2] == ["body", field]
+    assert "Expected UploadFile" in error["details"]["errors"][0]["msg"]
+    assert api.job_count() == 0
+
+
 def test_missing_external_ref_query_is_validation_error(api):
     assert_error(api.client.get("/v1/jobs", headers=api.headers), 422, "validation_error")
 
