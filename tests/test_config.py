@@ -56,7 +56,7 @@ def test_defaults(clean_env):
     assert s.question_faithful_score == 4
     assert s.question_answerable_score == 4
     # Question generation (step 13)
-    assert (s.question_extra_rounds, s.question_dedup_threshold, s.question_choice_min_share) == (1, 0.95, 0.6)
+    assert (s.question_extra_rounds, s.question_dedup_threshold, s.question_choice_min_share) == (1, 0.94, 0.6)
     assert s.practical_bloom_levels == ("apply", "analyze", "evaluate", "create")
     assert s.no_answer_bloom_levels == ("evaluate", "create")
     assert (s.llm_temperature, s.llm_max_output_tokens) == (0.2, 32768)
@@ -97,12 +97,13 @@ def test_env_example_matches_the_code_defaults(clean_env):
 
 def test_replay_settings_keep_the_baseline_models(clean_env):
     """The replay tests do not rely on the code defaults: baseline_settings() passes the
-    models of baseline_v3/metrics.json explicitly."""
+    models and question settings of baseline_v4/metrics.json explicitly (the code default of
+    the dedup threshold is 0.94, the recording used 0.95)."""
     from tests.baseline_data import baseline_settings
 
-    metrics_path = REPO_ROOT / "baseline_v3" / "metrics.json"
+    metrics_path = REPO_ROOT / "baseline_v4" / "metrics.json"
     if not metrics_path.is_file():
-        pytest.skip("baseline_v3/metrics.json is missing")
+        pytest.skip("baseline_v4/metrics.json is missing")
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     models, roles = metrics["models"], metrics["run"]["models_by_role"]
     s = baseline_settings()
@@ -113,8 +114,12 @@ def test_replay_settings_keep_the_baseline_models(clean_env):
     assert s.llm_model_eval == models["item_evaluation"]
     assert s.lo_batch_size == models["lo_batch_size"]
     assert s.question_eval_batch_size == models["item_evaluation_batch_size"]
-    if s.question_generation_batch_size != models["item_batch_size"]:
-        pytest.skip("čaká na baseline_v4 (step 13: 3 sections per generation call, baseline_v3 used 10)")
+    assert s.question_generation_batch_size == models["item_batch_size"]
+    recorded = metrics["questions"]["settings"]
+    for name in ("question_generation_batch_size", "question_extra_rounds", "question_dedup_threshold",
+                 "llm_temperature", "llm_max_output_tokens"):
+        assert getattr(s, name) == recorded[name], name
+    assert s.question_dedup_threshold == 0.95 != Settings(_env_file=None).question_dedup_threshold == 0.94
 
 
 def test_values_from_environment(clean_env):

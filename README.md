@@ -376,11 +376,11 @@ doručovania: `docker compose -f docker-compose.dev.yml logs -f webhook-worker`.
 
 Skript `tools/resilience_check.py` overí odolnosť skutočnej služby v kontajneroch
 (špecifikácia, kap. 9: test odolnosti, test 202, test mazania). Nevolá LLM API: worker
-odpovedá z nahrávky `baseline_v3/llm_calls.jsonl` (override `docker-compose.replay.yml`,
+odpovedá z nahrávky `baseline_v4/llm_calls.jsonl` (override `docker-compose.replay.yml`,
 `QGEN_LLM_PROVIDER=replay`, `QGEN_EMBED_PROVIDER=replay`). Každé volanie je umelo spomalené
 (`QGEN_LLM_REPLAY_DELAY_S`, predvolene 1 s), aby sa dal kontajner zabiť počas behu.
 
-Potrebujete Docker, lokálnu nahrávku `baseline_v3/` a `eko.pdf` (v `tests/fixtures/` alebo
+Potrebujete Docker, lokálnu nahrávku `baseline_v4/` a `eko.pdf` (v `tests/fixtures/` alebo
 `Hlavna_cast/ucebny_material/`). Porty 8000 a 9000 musia byť voľné. Skript sám spustí
 kontajnery, prijíma webhooky (port 9000) a na konci zavolá `docker compose down` (volume
 ostanú). Beží asi 15 minút, nie je súčasťou `pytest`.

@@ -182,3 +182,26 @@ def test_question_model_directly():
         choices=[],
     )
     assert q.model_dump()["choices"] == []
+
+
+# --- the official example of the format from ECEH ----------------------------------------
+# tests/contract/fixtures/units_official_example.json is the file delivered by ECEH, stored
+# unchanged (also its test texts and its formatting).
+
+OFFICIAL_EXAMPLE = FIXTURES / "units_official_example.json"
+
+
+def test_official_example_passes_model_and_schema(schema_validator):
+    data = json.loads(OFFICIAL_EXAMPLE.read_text(encoding="utf-8"))
+    result = UnitsResult.model_validate(data)
+    schema_validator.validate(data)
+    assert [len(unit.questions) for unit in result.units] == [3, 4]
+    assert [q.type for q in result.units[1].questions] == ["choice", "choice", "no_answer", "no_answer"]
+
+
+def test_official_example_round_trip_gives_the_same_json():
+    data = json.loads(OFFICIAL_EXAMPLE.read_text(encoding="utf-8"))
+    serialized = UnitsResult.model_validate(data).model_dump_json()
+    assert json.loads(serialized) == data
+    # also key order: the model writes the fields in the order of the official example
+    assert serialized == json.dumps(data, ensure_ascii=False, separators=(",", ":"))

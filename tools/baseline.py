@@ -15,9 +15,8 @@ settings. Thresholds, batch sizes and attempts stay at the code defaults (= app.
 so .env cannot change them. Before the run the tool prints the model of every role and
 calls factory.check_config().
 
-Protected recordings (baseline_v4/ joins them when the replay tests move to it):
-baseline_v3/ (reference of the replay tests until they move to v4), baseline/ (gemini-2.5,
-historical record). --out pointing at one of them is refused unless
+Protected recordings: baseline_v4/ (reference of the replay tests, step 13), baseline_v3/
+(old question format) and baseline/ (gemini-2.5), historical records. --out pointing at one of them is refused unless
 --force is given.
 
 Usage (from the repo root):
@@ -71,8 +70,8 @@ ITEM_EVALUATION_BATCH_SIZE = 20
 LO_BATCH_SIZE = 10
 ITEM_BATCH_SIZE = 3  # sections per question generation call (QGEN_QUESTION_GENERATION_BATCH_SIZE, step 13)
 # Recordings that must not be overwritten by accident: the reference of the replay tests
-# (baseline_v3/) and the historical gemini-2.5 record (baseline/).
-PROTECTED_BASELINE_DIRS = (REPO_ROOT / "baseline_v3", REPO_ROOT / "baseline")
+# (baseline_v4/) and the historical records (baseline_v3/, gemini-2.5 baseline/).
+PROTECTED_BASELINE_DIRS = (REPO_ROOT / "baseline_v4", REPO_ROOT / "baseline_v3", REPO_ROOT / "baseline")
 
 class UnexpectedClientCreation(RuntimeError):
     pass
@@ -193,7 +192,7 @@ def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, 
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "run": run,
         "inputs": inputs,
-        # Same keys as baseline_v3/metrics.json (read by the replay tests).
+        # Same keys as baseline_v4/metrics.json (read by the replay tests).
         "models": {
             "lo_generation": pipeline_settings.llm_model_lo,
             "lo_prerequisites": pipeline_settings.llm_model_lo,
@@ -267,17 +266,17 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("pdfs", nargs="+", help="Input PDF file(s), e.g. tests/fixtures/eko.pdf")
     parser.add_argument("--out", required=True,
-                        help="Output directory, e.g. baseline_v4 (baseline/ and baseline_v3/ only with --force)")
+                        help="Output directory, e.g. baseline_v5 (baseline/, baseline_v3/, baseline_v4/ only with --force)")
     parser.add_argument("--app-models", action="store_true",
                         help="Use the fixed models of the former app.py (Gemini 2.5) instead of the settings.")
     parser.add_argument("--force", action="store_true",
-                        help="Allow --out to be a protected recording (baseline/, baseline_v3/).")
+                        help="Allow --out to be a protected recording (baseline/, baseline_v3/, baseline_v4/).")
     args = parser.parse_args(argv)
 
     if is_reference_baseline(Path(args.out)) and not args.force:
         parser.error(
-            f"--out {args.out} is a protected recording (baseline_v3/ = reference of the replay tests, "
-            "baseline/ = historical record); choose another folder (e.g. baseline_v4) or add --force."
+            f"--out {args.out} is a protected recording (baseline_v4/ = reference of the replay tests, "
+            "baseline_v3/ and baseline/ = historical records); choose another folder (e.g. baseline_v5) or add --force."
         )
 
     pdf_paths = [str(Path(p).resolve()) for p in args.pdfs]

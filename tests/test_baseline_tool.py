@@ -1,5 +1,5 @@
 """tools/baseline.py: models from the settings or --app-models, start-up check, run info in
-metrics.json and protection of the recordings baseline_v3/ (reference) and baseline/
+metrics.json and protection of the recordings baseline_v4/ (reference), baseline_v3/ and baseline/
 (historical). No network, no pipeline run."""
 
 import importlib.util
@@ -57,11 +57,12 @@ def test_reference_baseline_is_detected(baseline, tmp_path):
     assert baseline.is_reference_baseline(REPO / "baseline")
     assert baseline.is_reference_baseline(REPO / "tools" / ".." / "baseline")
     assert baseline.is_reference_baseline(REPO / "baseline_v3")
+    assert baseline.is_reference_baseline(REPO / "baseline_v4")
     assert not baseline.is_reference_baseline(REPO / "baseline_v2")
     assert not baseline.is_reference_baseline(tmp_path)
 
 
-@pytest.mark.parametrize("folder", ["baseline", "baseline_v3"])
+@pytest.mark.parametrize("folder", ["baseline", "baseline_v3", "baseline_v4"])
 def test_out_protected_recording_is_refused_without_force(baseline, capsys, folder):
     with pytest.raises(SystemExit) as info:
         baseline.main([str(REPO / "tests" / "fixtures" / "eko.pdf"), "--out", str(REPO / folder)])
@@ -114,6 +115,6 @@ def test_metrics_contain_the_run_info(baseline, tmp_path):
         "models_by_role": {"lo": "base", "prereq": "base", "questions": "base", "eval": "ev",
                            "check": "base", "topics": "base", "split": "base", "embed": "emb"},
     }
-    # Same keys as baseline_v3/metrics.json, with the models actually used.
+    # Same keys as baseline_v4/metrics.json, with the models actually used.
     assert metrics["models"]["lo_generation"] == "base" and metrics["models"]["item_evaluation"] == "ev"
     assert metrics["models"]["lo_batch_size"] == 10

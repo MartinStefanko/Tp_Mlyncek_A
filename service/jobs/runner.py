@@ -50,17 +50,18 @@ logger = logging.getLogger("qgen.worker")
 PROGRESS_INTERVAL_S = 2.0
 PROGRESS_BEFORE_COMPLETED = 0.99
 
-# Share of each step in the whole run (split is skipped in mode "single"). From the times of
-# baseline_v3 (LO 24 s, LO checks 14 s, question generation 62 s, question evaluation 183 s)
-# with the step-13 changes: the quality score moved to q_evaluation and one extra round about
-# doubles the generation. questions + q_evaluation = 0.81. Re-measure on baseline_v4.
+# Share of each step in the whole run (split is skipped in mode "single"), from the times of
+# baseline_v4 (eko.pdf, 460 s): sections (tematické celky) 38 s (generation 25 s, checks 13 s),
+# question generation incl. the extra round 168 s, question evaluation 253 s. Extraction,
+# language and output keep a small fixed share (0.05); the rest (0.95) is split by these
+# times: questions + q_evaluation = 0.87.
 STAGE_WEIGHTS: dict[str, float] = {
     "extract": 0.02,
     "language": 0.01,
-    "learning_objects": 0.09,
-    "lo_evaluation": 0.05,
-    "questions": 0.33,
-    "q_evaluation": 0.48,
+    "learning_objects": 0.05,
+    "lo_evaluation": 0.03,
+    "questions": 0.35,
+    "q_evaluation": 0.52,
     "output": 0.02,
 }
 STAGE_ORDER: tuple[str, ...] = (*PIPELINE_STAGES, "output")

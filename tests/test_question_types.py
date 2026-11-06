@@ -271,7 +271,7 @@ def test_duplicates_are_removed_only_within_a_section():
                                sections=SECTIONS[:2])
     assert [(q["lo_id"], q["choices"][0]["text"]) for q in result.questions] == [(1, "Správna 1/1"), (2, "Správna 1/2")]
     assert diagnostics["duplicates_removed"]["total"] == 1
-    assert diagnostics["dedup_threshold"] == 0.95
+    assert diagnostics["dedup_threshold"] == 0.94
     dropped = [q for q in result.all_questions if q["drop_reason"] == "duplicate"]
     assert [q["choices"][0]["text"] for q in dropped] == ["Správna 2/1"]
 

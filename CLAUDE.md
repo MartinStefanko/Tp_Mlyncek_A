@@ -44,12 +44,15 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 ## Cieľ generovania a referenčná nahrávka
 - Cieľ generovania: čo najviac otázok, pokrytie všetkých tematických celkov.
   per_section je minimum, nie strop.
-- Replay testy (test ekvivalencie, test_cli, test_progress) stoja na referenčnej nahrávke
-  baseline_v3/ (gemini-3.1-flash-lite + gemini-3.5-flash, commit 42a7cd1). Očakávané hodnoty
-  a modely (tests/baseline_data.py) sa berú iba z jej súborov; v gite je len metrics.json,
-  bez lokálnej nahrávky sa testy preskočia. Zmena promptu = nová nahrávka (tools/baseline.py),
-  nie úprava testov.
-- baseline/ (gemini-2.5) je iba historický záznam; žiadny test ho nepoužíva.
+- Replay testy (test ekvivalencie, test_cli, test_progress, replay časti workera) stoja na
+  referenčnej nahrávke baseline_v4/ (gemini-3.1-flash-lite + gemini-3.5-flash). Meraná bola
+  s kódom kroku 13 pred jeho commitom (metrics.json: git_commit 9e1eddf, git_dirty true);
+  zodpovedá jej commit c9cb618. Očakávané hodnoty, modely aj nastavenia otázok
+  (metrics.json "questions" → "settings", napr. prah duplicít 0.95) berie tests/baseline_data.py
+  iba z jej súborov, nie z predvolených hodnôt kódu. V gite je len metrics.json, bez lokálnej
+  nahrávky sa testy preskočia. Zmena promptu = nová nahrávka (tools/baseline.py), nie úprava testov.
+- baseline/ (gemini-2.5) a baseline_v3/ (starý formát otázok) sú iba historické záznamy;
+  žiadny test ich nepoužíva. Všetky tri sú chránené v tools/baseline.py.
 
 ## Požiadavky na ďalšie kroky (z kroku 8)
 - Krok 9: `delete_job` (DELETE hotovej úlohy aj mazanie po TTL) musí odstrániť aj rezerváciu
@@ -73,14 +76,11 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Generovanie po QGEN_QUESTION_GENERATION_BATCH_SIZE (3) celkoch; odpoveď odrezaná na limite
   tokenov (OutputTruncatedError) rozdelí batch na polovicu; jeden celok, ktorý sa nezmestí = LLMError.
 - Anthropic: temperature sa neposiela vôbec (ani extra_body).
-- Prah duplicít 0.95 je predbežný (v3: max 0.938 pre rôzne otázky); doladiť na baseline_v4
-  cez tools/dedup_report.py.
+- Doplňujúce kolá: QGEN_QUESTION_EXTRA_ROUNDS=1.
+- Prah duplicít QGEN_QUESTION_DEDUP_THRESHOLD=0.94 (baseline_v4 nahratá s 0.95; dvojice
+  0.947–0.949 boli tiež preformulované otázky). Replay testy používajú 0.95 z nahrávky.
 
 ## Požiadavky na ďalšie kroky (z kroku 13)
-- Nahrať baseline_v4, prepnúť na ňu replay testy (tests/baseline_data.py: BASELINE_DIR,
-  `replay_client()` dnes vždy skip „čaká na baseline_v4“), pridať baseline_v4 do
-  PROTECTED_BASELINE_DIRS, prepnúť docker-compose.replay.yml na v4, overiť prah duplicít
-  a STAGE_WEIGHTS podľa nameraných časov.
 - Krok 14: poradie v hodine choice → open → no_answer, dĺžkové limity a skracovanie.
 
 ## Požiadavky na ďalšie kroky (z kroku 11)

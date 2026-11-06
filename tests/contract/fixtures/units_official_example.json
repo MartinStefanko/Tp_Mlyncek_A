@@ -1,0 +1,126 @@
+{
+  "units": [
+    {
+      "title": "Introduction to Physics",
+      "description": "Basic concepts of mechanics and motion",
+      "questions": [
+        {
+          "name": "Newton's First Law",
+          "description": "What does Newton's First Law state?",
+          "type": "choice",
+          "time_to_handle": 120,
+          "time_to_explain": 30,
+          "hints": [
+            {
+              "name": "Easy hint",
+              "url": "<p>Think about objects at rest and in motion</p>"
+            },
+            {
+              "name": "Hard hint",
+              "url": "<p>Consider Newton's laws of motion</p>"
+            }
+          ],
+          "choices": [
+            {
+              "text": "An object at rest stays at rest unless acted upon by a force",
+              "is_correct": true
+            },
+            {
+              "text": "Force equals mass times acceleration",
+              "is_correct": false
+            }
+          ]
+        },
+        {
+          "name": "Explain Gravity",
+          "description": "Explain how gravity works in your own words",
+          "type": "open",
+          "time_to_handle": 300,
+          "time_to_explain": 0,
+          "hints": [
+            {
+              "name": "Tip",
+              "url": "<p>Consider mass and distance</p>"
+            }
+          ],
+          "choices": [{
+            "text": "Gravity is a force that attracts two bodies towards each other. The strength of this force depends on the masses of the objects and the distance between them.",
+            "is_correct": true
+          }]
+        },
+        {
+          "name": "Theory Question",
+          "description": "Read the following passage about quantum mechanics...",
+          "type": "no_answer",
+          "time_to_handle": 0,
+          "time_to_explain": 180,
+          "hints": [],
+          "choices": []
+        }
+      ]
+    },
+    {
+      "title": "Moja uzasna jednostka",
+      "description": "Basic concepts of body motion",
+      "questions": [
+        {
+          "name": "halalal",
+          "description": "halalal",
+          "type": "choice",
+          "time_to_handle": 120,
+          "time_to_explain": 30,
+          "hints": [
+          ],
+          "choices": [
+            {
+              "text": "An object at rest stays at rest unless acted upon by a force true",
+              "is_correct": true
+            },
+            {
+              "text": "Force equals mass times acceleration true",
+              "is_correct": true
+            }
+          ]
+        },
+        {
+          "name": "halala222l",
+          "description": "hala22lal",
+          "type": "choice",
+          "time_to_handle": 120,
+          "time_to_explain": 30,
+          "hints": [
+          ],
+          "choices": [
+            {
+              "text": "An object at rest stays at rest unless acted upon by a force true",
+              "is_correct": true
+            },
+            {
+              "text": "Force equals mass times acceleration true",
+              "is_correct": true
+            }
+          ]
+        },
+        {
+          "name": "Explain Top G",
+          "description": "Describe Separ working as a top G",
+          "type": "no_answer",
+          "time_to_handle": 300,
+          "time_to_explain": 0,
+          "hints": [
+          ],
+          "choices": []
+        },
+        {
+          "name": "No Question",
+          "description": "Read mdfckr",
+          "type": "no_answer",
+          "time_to_handle": 0,
+          "time_to_explain": 180,
+          "hints": [],
+          "choices": []
+        }
+      ]
+    }
+  ]
+}

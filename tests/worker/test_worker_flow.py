@@ -13,7 +13,13 @@ from qgen.contract import Report, UnitsResult
 from qgen.contract.schemas import build_schema
 from qgen.extraction.text_extraction import OcrUnavailableError, pdfs_to_text
 from qgen.progress import PIPELINE_STAGES
-from tests.baseline_data import baseline_models, load_json, replay_client, require_baseline
+from tests.baseline_data import (
+    baseline_models,
+    baseline_question_settings,
+    load_json,
+    replay_client,
+    require_baseline,
+)
 from tests.fakes import FakeLLM, client_error
 from tests.worker.conftest import EKO_PDF, HEADERS, SEGMENTS, fixed_extraction, scripted_answer
 
@@ -129,9 +135,10 @@ def test_options_reach_the_pipeline(env, ocr):
 
 
 def test_replay_eko_completed(env_factory):
-    """eko.pdf over baseline_v3: counts must match the recording."""
+    """eko.pdf over baseline_v4: counts must match the recording."""
     require_baseline()
-    env = env_factory(**baseline_models())
+    # models and question settings of the recording (dedup threshold 0.95, code default 0.94)
+    env = env_factory(**baseline_models(), **baseline_question_settings())
     replay = replay_client()
     env.use(llm=replay, embedder=replay, extract=fixed_extraction(load_json("segments.json")))
     job_id = env.create({"external_ref": "eko-1"}, pdf=EKO_PDF.read_bytes(), name="eko.pdf")
@@ -142,7 +149,9 @@ def test_replay_eko_completed(env_factory):
     assert len(units.units[0].questions) == len(load_json("questions.json"))
     assert len(report.sections) == len(load_json("learning_objects.json"))
     assert {m.source[0].file for m in report.question_meta if m.source} == {"eko.pdf"}
-    assert all(q.type == "open" for q in units.units[0].questions)
+    recorded_types = load_json("metrics.json")["questions"]["types_accepted"]
+    types = [q.type for q in units.units[0].questions]
+    assert {t: types.count(t) for t in recorded_types} == recorded_types
 
 
 # --- errors ---------------------------------------------------------------------------------

@@ -5,10 +5,13 @@ description). A new question whose cosine similarity with a kept question of the
 section is >= QGEN_QUESTION_DEDUP_THRESHOLD is a duplicate; questions are taken in the order
 they were created, so the first wording stays.
 
-Calibration (step 13, baseline_v3, recorded embeddings of the questions): within sections
-the median similarity is 0.81, the 95th percentile 0.91, the maximum 0.938 (two different
-questions on the same concept). The default 0.95 removes none of them. tools/dedup_report.py
-shows the most similar pairs of a recording to tune the threshold on baseline_v4.
+Calibration (tools/dedup_report.py on the recorded embeddings):
+    baseline_v3 (no extra rounds): max 0.938 for two different questions on one concept.
+    baseline_v4 (recorded with 0.95; 288 pairs within sections): median 0.78, 95th
+        percentile 0.91; rephrasings removed at 0.95-0.97; pairs at 0.947-0.949 are mostly
+        rephrasings too (same relation asked twice).
+Decision: default 0.94 (QGEN_QUESTION_DEDUP_THRESHOLD). The replay tests keep 0.95, the
+value of the recording.
 """
 
 from __future__ import annotations
