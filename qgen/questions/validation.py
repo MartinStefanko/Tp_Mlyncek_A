@@ -1,22 +1,48 @@
+"""Validation of the questions of the pipeline (internal format, qgen.questions.types).
+
+Errors (the question is dropped, reason "validation"): missing fields, empty description,
+unknown type, the type rules of the contract (qgen.contract.units.type_rule_errors: choice
+>= 2 options and >= 1 correct, no duplicate texts; open exactly 1 correct choice; no_answer
+without choices), is_correct that is not a bool, an "all / none of the above" choice, bad
+`source`. Error texts start with "Polozka {id}" (qgen.questions.pipeline reads the ids).
+
+Warnings (the question stays), with a code in `warning_counts` / `warning_items`:
+    choice_count_mismatch   number of choices != options.questions.choice_options
+    hints_missing           fewer hints than options.questions.hints
+    hint_page_reference     a hint or the question mentions pages / chapters
+                            (regex "stran|strana|kapitol"; the student has no PDF in ECEH)
+Length limits are the output step (krok 14).
+"""
+
 import json
+from collections import Counter
+from typing import Optional
 
 from qgen.context_builder import parse_source_ref_strings
-
+from qgen.contract.units import type_rule_errors
+from qgen.questions.types import FORBIDDEN_CHOICE_RE, PAGE_REFERENCE_RE, QUESTION_TYPES, QuestionSettings
 
 REQUIRED_ITEM_FIELDS = {
     "id",
     "lo_id",
-    "typ",
-    "otazka",
-    "odpoved",
-    "napoveda",
-    "citovane_zdroje",
+    "name",
+    "description",
+    "type",
+    "time_to_handle",
+    "time_to_explain",
+    "hints",
+    "choices",
+    "source",
 }
 
-ALLOWED_ITEM_TYPES = {"teoreticka_otazka", "prakticka_uloha"}
+ALLOWED_ITEM_TYPES = set(QUESTION_TYPES)
+
+WARNING_CHOICE_COUNT = "choice_count_mismatch"
+WARNING_HINTS_MISSING = "hints_missing"
+WARNING_PAGE_REFERENCE = "hint_page_reference"
 
 
-def validate_items_json_text(text, allowed_pages=None, valid_lo_ids=None):
+def validate_items_json_text(text, allowed_pages=None, valid_lo_ids=None, question_settings=None):
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
@@ -25,19 +51,26 @@ def validate_items_json_text(text, allowed_pages=None, valid_lo_ids=None):
             "is_valid": False,
             "errors": [f"Nevalidny JSON: {e}"],
             "warnings": [],
+            "warning_counts": {},
+            "warning_items": [],
             "stats": {"total": 0, "valid": 0, "invalid": 0},
         }
-    return validate_items(data, allowed_pages=allowed_pages, valid_lo_ids=valid_lo_ids)
+    return validate_items(data, allowed_pages=allowed_pages, valid_lo_ids=valid_lo_ids,
+                          question_settings=question_settings)
 
 
-def validate_items(data, allowed_pages=None, valid_lo_ids=None):
+def validate_items(data, allowed_pages=None, valid_lo_ids=None, question_settings: Optional[QuestionSettings] = None):
+    qs = question_settings or QuestionSettings()
     report = {
         "is_valid_json": True,
         "is_valid": True,
         "errors": [],
         "warnings": [],
+        "warning_counts": {},
+        "warning_items": [],
         "stats": {"total": 0, "valid": 0, "invalid": 0},
     }
+    warning_counts: Counter = Counter()
 
     if not isinstance(data, list):
         report["is_valid"] = False
@@ -49,6 +82,11 @@ def validate_items(data, allowed_pages=None, valid_lo_ids=None):
     known_sources = {str(p).strip() for p in (allowed_pages or []) if str(p).strip()}
     known_lo_ids = set(valid_lo_ids or [])
     item_ids = []
+
+    def warn(code, item_id, prefix, message):
+        warning_counts[code] += 1
+        report["warnings"].append(f"{prefix} {message}")
+        report["warning_items"].append({"code": code, "item_id": item_id, "message": message})
 
     for index, item in enumerate(data, start=1):
         prefix = f"Polozka na indexe {index}"
@@ -74,33 +112,69 @@ def validate_items(data, allowed_pages=None, valid_lo_ids=None):
             prefix = f"Polozka {item_id}"
 
         lo_id = item.get("lo_id")
-        if not isinstance(lo_id, int) or lo_id <= 0:
+        if not isinstance(lo_id, int) or isinstance(lo_id, bool) or lo_id <= 0:
             report["errors"].append(f"{prefix} ma neplatne pole 'lo_id' (ocakavane kladne cele cislo).")
             item_valid = False
         elif known_lo_ids and lo_id not in known_lo_ids:
             report["errors"].append(f"{prefix} odkazuje na neexistujuce LO id {lo_id}.")
             item_valid = False
 
-        item_type = item.get("typ")
-        if not isinstance(item_type, str):
-            report["errors"].append(f"{prefix} ma nespravny typ pola 'typ' (ocakavany string).")
-            item_valid = False
-        elif not item_type.strip():
-            report["errors"].append(f"{prefix} ma prazdne pole 'typ'.")
-            item_valid = False
-        elif item_type not in ALLOWED_ITEM_TYPES:
-            report["errors"].append(
-                f"{prefix} ma neplatnu hodnotu pola 'typ' ({item_type})."
-            )
+        if not validate_non_empty_text(item.get("description"), prefix, "description", report):
             item_valid = False
 
-        if not validate_non_empty_text(item.get("otazka"), prefix, "otazka", report):
+        item_type = item.get("type")
+        type_known = isinstance(item_type, str) and item_type in ALLOWED_ITEM_TYPES
+        if not isinstance(item_type, str) or not item_type.strip():
+            report["errors"].append(f"{prefix} ma prazdne alebo nespravne pole 'type'.")
             item_valid = False
-        if not validate_non_empty_value(item.get("odpoved"), prefix, "odpoved", report):
+        elif not type_known:
+            report["errors"].append(f"{prefix} ma neplatnu hodnotu pola 'type' ({item_type}).")
             item_valid = False
-        if not validate_non_empty_value(item.get("napoveda"), prefix, "napoveda", report):
+
+        choices = item.get("choices")
+        if not isinstance(choices, list):
+            report["errors"].append(f"{prefix} ma nespravny typ pola 'choices' (ocakavany zoznam).")
             item_valid = False
-        if not validate_sources(item.get("citovane_zdroje"), prefix, report, known_sources):
+            choices = []
+        pairs = []
+        for position, choice in enumerate(choices, start=1):
+            text = choice.get("text") if isinstance(choice, dict) else None
+            correct = choice.get("is_correct") if isinstance(choice, dict) else None
+            if not isinstance(text, str) or not text.strip():
+                report["errors"].append(f"{prefix} ma prazdnu moznost na pozicii {position}.")
+                item_valid = False
+            if not isinstance(correct, bool):
+                report["errors"].append(f"{prefix} ma pri moznosti {position} 'is_correct', ktore nie je true/false.")
+                item_valid = False
+            pairs.append((str(text or ""), correct is True))
+
+        if type_known:
+            for error in type_rule_errors(item_type, pairs):
+                report["errors"].append(f"{prefix}: {error}.")
+                item_valid = False
+            if item_type == "choice":
+                forbidden = [text for text, _ in pairs if FORBIDDEN_CHOICE_RE.search(text)]
+                if forbidden:
+                    report["errors"].append(f"{prefix} ma nepovolenu moznost typu 'vsetky/ziadna z uvedenych'.")
+                    item_valid = False
+                if len(pairs) != qs.choice_options:
+                    warn(WARNING_CHOICE_COUNT, item_id, prefix,
+                         f"ma {len(pairs)} moznosti namiesto {qs.choice_options}.")
+
+        hints = item.get("hints")
+        if not isinstance(hints, list):
+            report["errors"].append(f"{prefix} ma nespravny typ pola 'hints' (ocakavany zoznam).")
+            item_valid = False
+            hints = []
+        elif len(hints) < qs.hints:
+            warn(WARNING_HINTS_MISSING, item_id, prefix, f"ma {len(hints)} napovedy namiesto {qs.hints}.")
+        hint_texts = [str(h.get("url", "")) for h in hints if isinstance(h, dict)]
+        if any(PAGE_REFERENCE_RE.search(text) for text in hint_texts):
+            warn(WARNING_PAGE_REFERENCE, item_id, prefix, "ma v napovede odkaz na stranu alebo kapitolu.")
+        elif PAGE_REFERENCE_RE.search(str(item.get("description", ""))):
+            warn(WARNING_PAGE_REFERENCE, item_id, prefix, "ma v zadani odkaz na stranu alebo kapitolu.")
+
+        if not validate_sources(item.get("source"), prefix, report, known_sources):
             item_valid = False
 
         if item_valid:
@@ -115,6 +189,7 @@ def validate_items(data, allowed_pages=None, valid_lo_ids=None):
         report["is_valid"] = False
 
     report["stats"]["invalid"] = report["stats"]["total"] - report["stats"]["valid"]
+    report["warning_counts"] = dict(warning_counts)
     return report
 
 
@@ -128,52 +203,31 @@ def validate_non_empty_text(value, prefix, field_name, report):
     return True
 
 
-def validate_non_empty_value(value, prefix, field_name, report):
-    if value is None:
-        report["errors"].append(f"{prefix} ma prazdne pole '{field_name}'.")
-        return False
-    if isinstance(value, str):
-        if not value.strip():
-            report["errors"].append(f"{prefix} ma prazdne pole '{field_name}'.")
-            return False
-        return True
-    if isinstance(value, list):
-        if not value:
-            report["errors"].append(f"{prefix} ma prazdne pole '{field_name}'.")
-            return False
-        return True
-    text = str(value).strip()
-    if not text:
-        report["errors"].append(f"{prefix} ma prazdne pole '{field_name}'.")
-        return False
-    return True
-
-
 def validate_sources(value, prefix, report, known_sources):
     if not isinstance(value, list):
-        report["errors"].append(f"{prefix} ma nespravny typ pola 'citovane_zdroje' (ocakavany zoznam).")
+        report["errors"].append(f"{prefix} ma nespravny typ pola 'source' (ocakavany zoznam).")
         return False
     if not value:
-        report["errors"].append(f"{prefix} ma prazdne pole 'citovane_zdroje'.")
+        report["errors"].append(f"{prefix} ma prazdne pole 'source'.")
         return False
 
     for idx, item in enumerate(value, start=1):
         if isinstance(item, str):
             if not item.strip():
-                report["errors"].append(f"{prefix} ma v 'citovane_zdroje' prazdnu hodnotu na pozicii {idx}.")
+                report["errors"].append(f"{prefix} ma v 'source' prazdnu hodnotu na pozicii {idx}.")
                 return False
             continue
         if isinstance(item, int):
             continue
         report["errors"].append(
-            f"{prefix} ma v 'citovane_zdroje' hodnotu na pozicii {idx} s nespravnym typom (ocakavany int alebo string)."
+            f"{prefix} ma v 'source' hodnotu na pozicii {idx} s nespravnym typom (ocakavany int alebo string)."
         )
         return False
 
     refs = parse_source_ref_strings(value)
     if not refs:
         report["errors"].append(
-            f"{prefix} ma v poli 'citovane_zdroje' neplatny format. Ocakava sa format D1:1 alebo cisla stran."
+            f"{prefix} ma v poli 'source' neplatny format. Ocakava sa format D1:1 alebo cisla stran."
         )
         return False
 

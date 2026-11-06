@@ -96,10 +96,11 @@ def test_progress_counts_batches(replay_progress):
     assert len(segments["learning_objects"]) > 3  # reported after batches, not only start and end
 
     lo_count = len(result.all_learning_objects)
-    question_batches = batch_count(len(result.learning_objects), settings.question_batch_size)
-    assert segments["questions"][0] == (0, question_batches)
-    assert segments["questions"][-1] == (question_batches, question_batches)
-    assert [d for d, _ in segments["questions"]] == list(range(question_batches + 1))
+    # step 13: per batch the first call and QGEN_QUESTION_EXTRA_ROUNDS extra rounds
+    question_units = batch_count(len(result.learning_objects), settings.question_generation_batch_size) * (
+        1 + settings.question_extra_rounds)
+    assert segments["questions"][0] == (0, question_units)
+    assert segments["questions"][-1] == (question_units, question_units)
 
     assert segments["lo_evaluation"][-1][1] <= 2 + batch_count(lo_count, settings.lo_batch_size)
     assert segments["q_evaluation"][-1][1] >= 1

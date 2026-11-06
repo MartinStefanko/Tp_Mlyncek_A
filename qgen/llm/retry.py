@@ -2,6 +2,7 @@
 
     generate_text  one prompt -> LLMResponse
     generate_json  generate_text + safe_load_json; invalid JSON -> one more call
+                   items_key="items": the answer must be {"items": [...]}; returns the list
     embed_texts    texts -> vectors, split into batches of QGEN_EMBED_MAX_BATCH
 
 Every call gets up to QGEN_LLM_RETRIES attempts (incl. the first). Which errors are retried
@@ -113,12 +114,19 @@ def generate_text(
     model: Optional[str] = None,
     verbose: bool = False,
     json_mode: bool = True,
+    max_tokens: Optional[int] = None,
 ) -> LLMResponse:
+    """One prompt with retries. JSON mode is on by default (every prompt asks for JSON);
+    temperature is QGEN_LLM_TEMPERATURE. An answer cut off at the token limit
+    (OutputTruncatedError) is not retried: LLMError with `truncated` = True."""
     _require_settings(settings)
     model = model or factory.model_for_role(role, settings)
     client = llm if llm is not None else factory.get_llm(role, settings)
+    temperature = settings.llm_temperature
     return _with_retry(
-        lambda: client.generate(prompt, model=model, json_mode=json_mode),
+        lambda: client.generate(
+            prompt, model=model, json_mode=json_mode, temperature=temperature, max_tokens=max_tokens
+        ),
         role=role, model=model, settings=settings, verbose=verbose,
     )
 
@@ -131,20 +139,25 @@ def generate_json(
     settings: Settings,
     model: Optional[str] = None,
     verbose: bool = False,
-    expect_list: bool = False,
+    items_key: Optional[str] = None,
+    max_tokens: Optional[int] = None,
 ) -> Any:
     """Parsed JSON answer. Invalid JSON twice in a row -> LLMError(invalid_json=True).
 
-    expect_list=True: valid JSON that is not an array (e.g. {"items": [...]}) counts as
-    invalid JSON: same repeated call, then LLMError(invalid_json=True). It never becomes an
-    empty result. Used where the prompt asks for an array of items (sections, questions).
+    items_key="items": the prompt asks for an object {"items": [...]} (JSON mode of every
+    provider returns an object). The answer must be a JSON object whose `items_key` is an
+    array; that array is returned. Anything else (an array, an object without the key, a
+    key that is not an array) counts as invalid JSON: same repeated call, then
+    LLMError(invalid_json=True). It never becomes an empty result.
     """
     _require_settings(settings)
     model = model or factory.model_for_role(role, settings)
     last_error: Optional[json.JSONDecodeError] = None
     wrong_shape: Optional[str] = None
     for attempt in range(1, JSON_ATTEMPTS + 1):
-        response = generate_text(llm, prompt, role=role, model=model, settings=settings, verbose=verbose)
+        response = generate_text(
+            llm, prompt, role=role, model=model, settings=settings, verbose=verbose, max_tokens=max_tokens
+        )
         try:
             parsed = safe_load_json(response.text or "")
         except json.JSONDecodeError as error:
@@ -152,19 +165,36 @@ def generate_json(
             if verbose and attempt < JSON_ATTEMPTS:
                 print(f"LLM vratilo neplatny JSON (role {role}), opakujem volanie.")
             continue
-        if expect_list and not isinstance(parsed, list):
-            last_error, wrong_shape = None, type(parsed).__name__
-            if verbose and attempt < JSON_ATTEMPTS:
-                print(f"LLM vratilo JSON {wrong_shape} namiesto pola (role {role}), opakujem volanie.")
-            continue
+        if items_key is not None:
+            shape = _items_shape_error(parsed, items_key)
+            if shape is not None:
+                last_error, wrong_shape = None, shape
+                if verbose and attempt < JSON_ATTEMPTS:
+                    print(f"LLM vratilo JSON zleho tvaru ({shape}, role {role}), opakujem volanie.")
+                continue
+            return parsed[items_key]
         return parsed
     if wrong_shape is not None:
-        message = f"LLM returned JSON of the wrong shape ({wrong_shape}, expected an array) also after the repeated call"
+        message = (
+            f"LLM returned JSON of the wrong shape ({wrong_shape}, expected an object with an array "
+            f"'{items_key}') also after the repeated call"
+        )
     else:
         message = "LLM returned invalid JSON also after the repeated call"
     raise LLMError(
         message, role=role, model=model, cause=last_error, invalid_json=True, attempts=JSON_ATTEMPTS,
     )
+
+
+def _items_shape_error(parsed: Any, items_key: str) -> Optional[str]:
+    """None when `parsed` is {items_key: [...]}, else a short description of the shape."""
+    if not isinstance(parsed, dict):
+        return type(parsed).__name__
+    if items_key not in parsed:
+        return f"object without '{items_key}'"
+    if not isinstance(parsed[items_key], list):
+        return f"'{items_key}' is {type(parsed[items_key]).__name__}"
+    return None
 
 
 def embed_texts(

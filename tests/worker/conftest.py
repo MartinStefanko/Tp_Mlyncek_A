@@ -37,7 +37,18 @@ from service.real_backend import RealBackend
 from service.settings import ServiceSettings
 from service.webhooks import rq_delivery
 from service.webhooks.rq_delivery import RqWebhookNotifier
-from tests.fakes import FakeEmbedder, FakeLLM
+from tests.fakes import (
+    EMPTY_ITEMS,
+    FakeEmbedder,
+    FakeLLM,
+    check_answer,
+    is_coverage_call,
+    is_extra_round,
+    is_question_generation,
+    items,
+    question,
+    section_ids,
+)
 from tests.service.conftest import make_pdf
 
 API_KEY = "test-key"
@@ -60,34 +71,24 @@ SECTION_NAMES = ((1, "Fotosyntéza"), (2, "Dýchanie"), (3, "Transpirácia"))
 # --- scripted model (same prompt markers as tests/test_generation_coverage.py) -------------
 
 
-def _section_ids(prompt: str) -> list[int]:
-    return [int(x) for x in re.findall(r"- lo_id: (\d+)", prompt)]
-
-
 def scripted_answer(prompt: str, model: str) -> str:
-    """Three sections, one question per section, every check scores 5."""
-    if "LO 1:" in prompt and "- lo_id:" in prompt:  # question generation
-        return json.dumps([
-            {"lo_id": i, "typ": "teoreticka_otazka", "otazka": f"Otázka k celku {i}?", "odpoved": "Odpoveď.",
-             "napoveda": "Pozri <b>definíciu</b>.", "citovane_zdroje": [f"D1:{i}"]}
-            for i in _section_ids(prompt)
-        ], ensure_ascii=False)
+    """Three sections; per section 3 questions (choice, choice, open) in the first call,
+    nothing new in the extra round; every check scores 5."""
+    if is_question_generation(prompt):
+        if is_extra_round(prompt) or is_coverage_call(prompt):
+            return EMPTY_ITEMS
+        rows = []
+        for i in section_ids(prompt):
+            rows += [question(i, 1, hints=["<p>Pozri <b>definíciu</b>.</p>"]), question(i, 2),
+                     question(i, 3, "open")]
+        return items(rows)
     if "extrahuj merateľné vzdelávacie ciele" in prompt:  # section generation
-        return json.dumps([
+        return items(
             {"vzdelávací_objekt": name, "bloom_level": "Pochopiť", "odporúčané_aktivity": ["čítanie"],
              "odporúčané_zadania": "Vysvetli.", "citovane_zdroje": [f"D1:{page}"]}
             for page, name in SECTION_NAMES
-        ], ensure_ascii=False)
-    if "LO ID:" in prompt:  # section faithfulness
-        ids = [int(x) for x in re.findall(r"LO ID: (\d+)", prompt)]
-        return json.dumps([{"lo_id": i, "skore": 5, "zdovodnenie": "ok"} for i in ids])
-    if "Item id:" in prompt:  # question quality score
-        ids = [int(x) for x in re.findall(r"Item id: (\d+)", prompt)]
-        return json.dumps([{"id": i, "skore": 5, "zdovodnenie": "ok"} for i in ids])
-    if "ITEM ID:" in prompt:  # question faithfulness / answerability
-        ids = [int(x) for x in re.findall(r"ITEM ID: (\d+)", prompt)]
-        return json.dumps([{"item_id": i, "skore": 5, "zdovodnenie": "ok"} for i in ids])
-    return "[]"
+        )
+    return check_answer(prompt) or EMPTY_ITEMS
 
 
 class OrthogonalVectors:

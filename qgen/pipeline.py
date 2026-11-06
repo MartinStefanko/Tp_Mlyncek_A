@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from qgen.config import Settings
+from qgen.contract.options import QuestionOptions
 from qgen.llm.base import EmbeddingClient, LLMClient
 from qgen.lo.pipeline import LOPipelineResult, generate_lo_pipeline
 from qgen.progress import ProgressCallback
@@ -54,10 +55,13 @@ def run_pipeline(
     settings: Settings,
     verbose: bool = False,
     per_section: Optional[int] = None,
+    question_options: Optional[QuestionOptions] = None,
 ) -> PipelineResult:
     """language: None / "auto" = detect (both pipelines detect, as today); "sk" / "en" = use it.
 
-    per_section: options.questions.per_section, the minimum of questions per section (None = 3).
+    question_options: options.questions of the job (types, per_section, choice_options,
+    hints); None = the defaults of Príloha A.
+    per_section: the minimum of questions per section; overrides question_options (None = 3).
 
     llm / embedder: the clients for all LLM / embedding calls; None = qgen.llm.factory.
     Raises qgen.llm.errors.LLMError when an LLM or embedding call fails for good (after the
@@ -86,6 +90,7 @@ def run_pipeline(
             progress_callback=progress_callback,
             settings=settings,
             per_section=per_section,
+            question_options=question_options,
         )
         reports.update(question_result.reports)
     return PipelineResult(

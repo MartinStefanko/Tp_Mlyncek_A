@@ -3,7 +3,7 @@
     1. read job.json; not queued (cancelled, already taken, duplicate entry) → end quietly
     2. queued → running (the store adds 1 to attempts), check_config
     3. extraction of input/*.pdf (options: OCR), check that some page has text
-    4. run_pipeline (options: language, per_section) with a progress callback
+    4. run_pipeline (options: language, questions) with a progress callback
     5. output: temporary mapping to units + report (service.jobs.legacy_output, step 14)
     6. save result.json and report.json, running → completed, delete the PDFs
 
@@ -50,14 +50,17 @@ logger = logging.getLogger("qgen.worker")
 PROGRESS_INTERVAL_S = 2.0
 PROGRESS_BEFORE_COMPLETED = 0.99
 
-# Share of each step in the whole run (split is skipped in mode "single").
+# Share of each step in the whole run (split is skipped in mode "single"). From the times of
+# baseline_v3 (LO 24 s, LO checks 14 s, question generation 62 s, question evaluation 183 s)
+# with the step-13 changes: the quality score moved to q_evaluation and one extra round about
+# doubles the generation. questions + q_evaluation = 0.81. Re-measure on baseline_v4.
 STAGE_WEIGHTS: dict[str, float] = {
-    "extract": 0.05,
-    "language": 0.02,
-    "learning_objects": 0.38,
-    "lo_evaluation": 0.15,
-    "questions": 0.25,
-    "q_evaluation": 0.13,
+    "extract": 0.02,
+    "language": 0.01,
+    "learning_objects": 0.09,
+    "lo_evaluation": 0.05,
+    "questions": 0.33,
+    "q_evaluation": 0.48,
     "output": 0.02,
 }
 STAGE_ORDER: tuple[str, ...] = (*PIPELINE_STAGES, "output")
@@ -256,7 +259,7 @@ class JobRunner:
             language=options.language,
             progress_callback=progress,
             settings=self.settings,
-            per_section=options.questions.per_section if options.questions else None,
+            question_options=options.questions,
         )
 
         progress("output", 0, 1)

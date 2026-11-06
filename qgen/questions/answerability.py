@@ -2,6 +2,7 @@ from qgen.context_builder import build_context_for_sources, build_page_map
 from qgen.config import Settings, setting_or_default
 from qgen.llm.retry import generate_json
 from qgen.progress import STAGE_Q_EVALUATION, batch_count, report_progress
+from qgen.questions.prompts import question_record_text
 
 
 def analyze_item_answerability(
@@ -46,7 +47,7 @@ def analyze_item_answerability(
         row = {
             "item_id": item.get("id"),
             "lo_id": item.get("lo_id"),
-            "source_pages": item.get("citovane_zdroje", []),
+            "source_pages": item.get("source", []),
             "answerability_score": None,
             "answerable": False,
             "reason": "",
@@ -60,7 +61,7 @@ def analyze_item_answerability(
         comparable_items.append({
             "row": row,
             "item_id": item.get("id"),
-            "question_text": question_to_text(item),
+            "question_text": question_to_text(item, document_language),
             "source_text": source_text,
         })
 
@@ -110,56 +111,23 @@ def analyze_item_answerability(
 def evaluate_item_answerability_batch(
     batch, llm=None, model=None, verbose: bool = True, document_language: str = "sk", *, settings: Settings
 ):
+    labels = ("Question", "Source") if document_language == "en" else ("Otázka", "Zdroj")
     parts = []
     for item in batch:
         parts.append(
             f"ITEM ID: {item['item_id']}\n"
-            f"Otazka:\n\"\"\"{item['question_text']}\"\"\"\n\n"
-            f"Zdroj:\n\"\"\"{item['source_text']}\"\"\""
+            f"{labels[0]}:\n\"\"\"{item['question_text']}\"\"\"\n\n"
+            f"{labels[1]}:\n\"\"\"{item['source_text']}\"\"\""
         )
     joined = "\n\n-----\n\n".join(parts)
-
-    if document_language == "en":
-        prompt = f"""
-Assess the answerability of each question against its source.
-
-Score 1-5:
-1 = the question cannot be reliably answered from the source
-5 = the question can be answered clearly and unambiguously from the source
-
-Records:
-{joined}
-
-Return ONLY valid JSON as an array of objects:
-[
-  {{"item_id": 1, "skore": 1, "zdovodnenie": "short justification in English"}}
-]
-"""
-    else:
-        prompt = f"""
-Posud answerability otazky voci zdroju pre kazdy zaznam.
-
-Skore 1-5:
-1 = na otazku sa zo zdroja neda spolahlivo odpovedat
-5 = na otazku sa da zo zdroja jasne a jednoznacne odpovedat
-
-Zaznamy:
-{joined}
-
-Vrat LEN validny JSON ako pole objektov:
-[
-  {{"item_id": 1, "skore": 1, "zdovodnenie": "kratke zdovodnenie"}}
-]
-"""
+    template = ANSWERABILITY_EN if document_language == "en" else ANSWERABILITY_SK
+    prompt = template.replace("<<records>>", joined)
 
     # Step 6: no `except Exception: return None` (the questions then lost their score and
-    # were filtered out); LLMError propagates.
-    parsed = generate_json(llm, prompt, role="check", model=model, verbose=verbose, settings=settings)
-
-    if isinstance(parsed, dict):
-        parsed = [parsed]
-    if not isinstance(parsed, list):
-        return {}
+    # were filtered out); LLMError propagates. Step 13: the answer is {"items": [...]}.
+    parsed = generate_json(
+        llm, prompt, role="check", model=model, verbose=verbose, settings=settings, items_key="items"
+    )
 
     evaluations = {}
     for row in parsed:
@@ -175,9 +143,43 @@ Vrat LEN validny JSON ako pole objektov:
     return evaluations
 
 
-def question_to_text(item):
-    return f"otazka: {item.get('otazka', '')}"
+def question_to_text(item, document_language: str = "sk"):
+    """Type, question and (for choice) the options without marks; no answer."""
+    return question_record_text(item, document_language, marks=False)
 
 
 def build_context_for_item(item, page_map, max_chars=None):
-    return build_context_for_sources(item.get("citovane_zdroje", []), page_map, max_chars=max_chars)
+    return build_context_for_sources(item.get("source", []), page_map, max_chars=max_chars)
+
+
+ANSWERABILITY_SK = """
+Posúď zodpovedateľnosť (answerability) každej otázky voči jej zdroju.
+
+Skóre 1–5:
+1 = na otázku sa zo zdroja nedá spoľahlivo odpovedať
+5 = na otázku sa dá zo zdroja odpovedať jasne a jednoznačne
+Pri "choice" posúď, či sa zo zdroja dá jednoznačne určiť, ktoré možnosti sú správne.
+Pri "no_answer" (úloha bez vyhodnotenia) posúď, či je zadanie jasné, splniteľné a súvisí s učivom zdroja.
+
+Záznamy:
+<<records>>
+
+Vráť LEN validný JSON objekt bez ďalšieho textu:
+{"items": [{"item_id": 1, "skore": 1, "zdovodnenie": "krátke zdôvodnenie"}]}
+"""
+
+ANSWERABILITY_EN = """
+Assess the answerability of each question against its source.
+
+Score 1-5:
+1 = the question cannot be reliably answered from the source
+5 = the question can be answered clearly and unambiguously from the source
+For "choice" assess whether the source makes it unambiguous which options are correct.
+For "no_answer" (a task that is not graded) assess whether the task is clear, doable and related to the subject matter of the source.
+
+Records:
+<<records>>
+
+Return ONLY a valid JSON object with no extra text:
+{"items": [{"item_id": 1, "skore": 1, "zdovodnenie": "short justification in English"}]}
+"""

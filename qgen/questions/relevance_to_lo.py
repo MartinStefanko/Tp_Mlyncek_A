@@ -6,6 +6,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from qgen.config import Settings, setting_or_default
 from qgen.llm.retry import embed_texts
 from qgen.lo.clustering import normalize_list_field
+from qgen.questions.types import correct_texts
 
 
 def analyze_item_relevance_to_lo(
@@ -82,11 +83,12 @@ def analyze_item_relevance_to_lo(
 
 
 def item_to_text(item: Dict[str, Any]):
+    """Type, question, texts of the correct choices and the hints."""
     parts = [
-        str(item.get("typ", "")).strip(),
-        str(item.get("otazka", "")).strip(),
-        normalize_list_field(item.get("odpoved")),
-        normalize_list_field(item.get("napoveda")),
+        str(item.get("type", "")).strip(),
+        str(item.get("description", "")).strip(),
+        normalize_list_field(correct_texts(item)),
+        normalize_list_field([h.get("url", "") for h in item.get("hints") or [] if isinstance(h, dict)]),
     ]
     return " ".join(part for part in parts if part)
 

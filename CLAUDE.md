@@ -63,6 +63,26 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 ## Požiadavky na ďalšie kroky (z kroku 10)
 - Krok 14: `service/jobs/legacy_output.py` je dočasný – nahradiť skutočným krokom output.
 
+## Rozhodnutia z kroku 13 (typy otázok)
+- Všetkých 14 promptov (aj LO pipeline) vracia objekt `{"items": [...]}` (`generate_json(items_key="items")`);
+  JSON režim zapnutý pri každom volaní. Iný tvar = neplatný JSON (opakovanie, potom LLMError).
+- Interný formát otázky = polia `Question` + metadáta (qgen/questions/types.py). Pravidlá typov sú
+  iba raz: `qgen.contract.units.type_rule_errors`.
+- Kontrola `is_correct` pri choice je v kontrole vernosti (faithfulness, má text zdroja);
+  `choices_ok: false` → otázka vyradená (`wrong_choice_marking`) s varovaním.
+- Generovanie po QGEN_QUESTION_GENERATION_BATCH_SIZE (3) celkoch; odpoveď odrezaná na limite
+  tokenov (OutputTruncatedError) rozdelí batch na polovicu; jeden celok, ktorý sa nezmestí = LLMError.
+- Anthropic: temperature sa neposiela vôbec (ani extra_body).
+- Prah duplicít 0.95 je predbežný (v3: max 0.938 pre rôzne otázky); doladiť na baseline_v4
+  cez tools/dedup_report.py.
+
+## Požiadavky na ďalšie kroky (z kroku 13)
+- Nahrať baseline_v4, prepnúť na ňu replay testy (tests/baseline_data.py: BASELINE_DIR,
+  `replay_client()` dnes vždy skip „čaká na baseline_v4“), pridať baseline_v4 do
+  PROTECTED_BASELINE_DIRS, prepnúť docker-compose.replay.yml na v4, overiť prah duplicít
+  a STAGE_WEIGHTS podľa nameraných časov.
+- Krok 14: poradie v hodine choice → open → no_answer, dĺžkové limity a skracovanie.
+
 ## Požiadavky na ďalšie kroky (z kroku 11)
 - Krok 13: nápovedy nesmú odkazovať na strany ani časti dokumentu („pozrite si stranu 14“) –
   študent v ECEH PDF nemá. Nápoveda má navádzať obsahom.

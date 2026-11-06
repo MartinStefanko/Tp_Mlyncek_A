@@ -15,8 +15,9 @@ settings. Thresholds, batch sizes and attempts stay at the code defaults (= app.
 so .env cannot change them. Before the run the tool prints the model of every role and
 calls factory.check_config().
 
-Protected recordings: baseline_v3/ is the reference of the replay tests, baseline/
-(gemini-2.5) the historical record. --out pointing at one of them is refused unless
+Protected recordings (baseline_v4/ joins them when the replay tests move to it):
+baseline_v3/ (reference of the replay tests until they move to v4), baseline/ (gemini-2.5,
+historical record). --out pointing at one of them is refused unless
 --force is given.
 
 Usage (from the repo root):
@@ -68,7 +69,7 @@ MODEL_FIELDS = tuple(APP_MODELS)
 # Same values as the former Hlavna_cast/app.py (= code defaults of qgen.config).
 ITEM_EVALUATION_BATCH_SIZE = 20
 LO_BATCH_SIZE = 10
-ITEM_BATCH_SIZE = 10
+ITEM_BATCH_SIZE = 3  # sections per question generation call (QGEN_QUESTION_GENERATION_BATCH_SIZE, step 13)
 # Recordings that must not be overwritten by accident: the reference of the replay tests
 # (baseline_v3/) and the historical gemini-2.5 record (baseline/).
 PROTECTED_BASELINE_DIRS = (REPO_ROOT / "baseline_v3", REPO_ROOT / "baseline")
@@ -144,6 +145,30 @@ def run_info(run_settings: Settings, models_source: str, started_at: datetime, v
 
 def stats_of(reports: dict, name: str) -> dict:
     return (reports.get(name) or {}).get("stats", {}) or {}
+
+
+def question_summary(diagnostics: dict, pipeline_settings: Settings) -> dict:
+    """Summary of the new question pipeline (step 13) from question_diagnostics."""
+    by_reason = (diagnostics.get("items_dropped") or {}).get("by_reason", {})
+    rounds = diagnostics.get("extra_rounds") or {}
+    return {
+        "settings": {
+            "question_generation_batch_size": pipeline_settings.question_generation_batch_size,
+            "question_extra_rounds": pipeline_settings.question_extra_rounds,
+            "question_dedup_threshold": pipeline_settings.question_dedup_threshold,
+            "llm_temperature": pipeline_settings.llm_temperature,
+            "llm_max_output_tokens": pipeline_settings.llm_max_output_tokens,
+        },
+        "types_generated": (diagnostics.get("question_types") or {}).get("generated"),
+        "types_accepted": (diagnostics.get("question_types") or {}).get("accepted"),
+        "practical_accepted": (diagnostics.get("question_types") or {}).get("practical_accepted"),
+        "extra_rounds_run": rounds.get("rounds_run"),
+        "extra_rounds": rounds.get("rounds"),
+        "generation_calls": diagnostics.get("generation_calls"),
+        "batch_splits": diagnostics.get("batch_splits"),
+        "duplicates_removed": (diagnostics.get("duplicates_removed") or {}).get("total"),
+        "wrong_choice_marking": by_reason.get("wrong_choice_marking", 0),
+    }
 
 
 def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, timings, recorder,
@@ -226,6 +251,8 @@ def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, 
             "by_method": dict(recorder.counts),
             "failed": recorder.errors,
         },
+        # Step 13: questions by type, extra rounds, batch splits, duplicates, wrong choice marking.
+        "questions": question_summary(reports.get("question_diagnostics") or {}, pipeline_settings),
         # Section counts, questions per section, dropped questions, coverage warnings.
         "section_diagnostics": reports.get("section_diagnostics"),
         "question_diagnostics": {

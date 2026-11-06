@@ -64,8 +64,10 @@ class RecordingClient:
         self._embedder = embedder
         self.recorder = CallRecorder(jsonl_path)
 
-    def _record(self, method: str, model: str, contents: Any, call, extract):
+    def _record(self, method: str, model: str, contents: Any, call, extract, config: Optional[dict] = None):
         record = {"method": method, "model": model, "contents": contents}
+        if config:
+            record["config"] = config  # informative only; the replay key is method, model, contents
         started = time.perf_counter()
         try:
             result = call()
@@ -100,6 +102,7 @@ class RecordingClient:
                 prompt, model=model, json_mode=json_mode, temperature=temperature, max_tokens=max_tokens
             ),
             extract,
+            config={"json_mode": json_mode, "temperature": temperature, "max_tokens": max_tokens},
         )
 
     def embed(self, texts: list[str], *, model: str) -> list[list[float]]:

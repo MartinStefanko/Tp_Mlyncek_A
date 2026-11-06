@@ -1,42 +1,91 @@
-import time
+"""Question pipeline (krok 13): questions of type choice / open / no_answer, as many as the
+content of each section (tematický celok) allows.
+
+    1. language of the document (as before)
+    2. per batch of QGEN_QUESTION_GENERATION_BATCH_SIZE sections:
+         first call (repeated up to question_generation_attempts times when empty),
+         then QGEN_QUESTION_EXTRA_ROUNDS extra rounds with the questions created so far;
+         a section stops when a round brought nothing new
+       every answer: normalization (qgen.questions.types), validation, type rules,
+       duplicates within the section (qgen.questions.dedup)
+       an answer cut off at the output token limit splits the batch in half
+    3. evaluation of the kept questions: quality score (chunks of question_eval_batch_size),
+       faithfulness with the check of the choice marking, answerability, filter
+    4. coverage: sections with fewer accepted questions than per_section get one more
+       call; the new questions go through 2-3 as well
+    5. relevance to the section (all questions), ordering, ids 1..n
+
+per_section (options.questions.per_section) is a minimum, never a target or a limit.
+Nothing is written to disk. LLMError propagates (also when a single section does not fit
+into the output token limit).
+"""
+
+from __future__ import annotations
+
 import re
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from qgen.config import Settings, setting_or_default
-from qgen.contract.options import OptionDefaults
+from qgen.contract.options import OptionDefaults, QuestionOptions
 from qgen.context_builder import (
     build_allowed_source_refs,
-    build_page_map,
     build_context_for_lo,
+    build_page_map,
     build_source_name_map,
     parse_source_refs,
     resolve_source_names,
 )
 from qgen.extraction.document_language import resolve_document_language
-from qgen.questions.answerability import analyze_item_answerability
-from qgen.questions.faithfulness import analyze_item_faithfulness
-from qgen.questions.relevance_to_lo import analyze_item_relevance_to_lo
-from qgen.questions.validation import validate_items
 from qgen.llm.base import EmbeddingClient, LLMClient
+from qgen.llm.errors import LLMError
 from qgen.llm.retry import generate_json
-from qgen.progress import (
-    STAGE_Q_EVALUATION,
-    STAGE_QUESTIONS,
-    ProgressCallback,
-    SubProgress,
-    batch_count,
-    report_progress,
+from qgen.progress import STAGE_Q_EVALUATION, STAGE_QUESTIONS, ProgressCallback, batch_count, report_progress
+from qgen.questions.answerability import analyze_item_answerability
+from qgen.questions.dedup import SectionDeduplicator
+from qgen.questions.faithfulness import analyze_item_faithfulness
+from qgen.questions.prompts import (
+    build_coverage_section,
+    build_extra_round_section,
+    build_item_evaluation_prompt,
+    build_item_generation_prompt,
+    build_lo_blocks,
+    evaluation_items_text,
 )
+from qgen.questions.relevance_to_lo import analyze_item_relevance_to_lo
+from qgen.questions.types import (
+    ORIGIN_COVERAGE,
+    ORIGIN_INITIAL,
+    QUESTION_TYPES,
+    QuestionSettings,
+    extra_origin,
+    normalize_generated_item,
+    normalize_sources,
+    type_permission_problem,
+)
+from qgen.questions.validation import WARNING_PAGE_REFERENCE, validate_items
+
+__all__ = [
+    "QuestionPipelineResult",
+    "generate_all_items",
+    "generate_items_for_batch",
+    "evaluate_items_batch",
+    "build_item_generation_prompt",
+    "build_item_evaluation_prompt",
+    "filter_items_variant_b",
+    "normalize_sources",
+]
 
 
 @dataclass
 class QuestionPipelineResult:
     """Result of generate_all_items. Nothing is written to disk.
 
-    questions      accepted questions with ids 1..n
-    all_questions  all questions before filtering
+    questions      accepted questions with ids 1..n (internal format, qgen.questions.types)
+    all_questions  all generated questions (ids 1..n of this list) with `drop_reason`
+                   (None = accepted)
     language_info  {"language": "sk"|"en", "reason": str}
     reports        report dicts, keys: item_validation, item_relevance_to_lo,
                    item_faithfulness, item_answerability, item_processing_time,
@@ -52,33 +101,74 @@ class QuestionPipelineResult:
 DEFAULT_PER_SECTION = OptionDefaults.per_section  # options.questions.per_section (Príloha A)
 
 # Reasons of dropped questions in the question_diagnostics report.
-DROP_MISSING_LO_ID = "missing_lo_id"            # generated item without "lo_id"
-DROP_INVALID_ITEM_SHAPE = "invalid_item_shape"  # array element that is not a JSON object
-DROP_VALIDATION = "validation"                  # failed validate_items
-DROP_LOW_SCORE = "low_score"                    # quality / faithfulness / answerability filter
-DROP_UNKNOWN_LO_ID = "unknown_lo_id"            # lo_id is not one of the sections
-DROP_REASONS = (DROP_MISSING_LO_ID, DROP_INVALID_ITEM_SHAPE, DROP_VALIDATION, DROP_LOW_SCORE, DROP_UNKNOWN_LO_ID)
+DROP_MISSING_LO_ID = "missing_lo_id"              # generated item without "lo_id"
+DROP_INVALID_ITEM_SHAPE = "invalid_item_shape"    # array element that is not a JSON object
+DROP_VALIDATION = "validation"                    # failed validate_items
+DROP_TYPE_NOT_ALLOWED = "type_not_allowed"        # type not in options.questions.types
+DROP_TYPE_RULE = "type_rule"                      # no_answer at a Bloom level that does not allow it
+DROP_DUPLICATE = "duplicate"                      # too similar to a question of the same section
+DROP_LOW_SCORE = "low_score"                      # quality / faithfulness / answerability filter
+DROP_WRONG_CHOICE_MARKING = "wrong_choice_marking"  # faithfulness check: is_correct does not match
+DROP_UNKNOWN_LO_ID = "unknown_lo_id"              # lo_id is not one of the sections
+DROP_REASONS = (
+    DROP_MISSING_LO_ID, DROP_INVALID_ITEM_SHAPE, DROP_VALIDATION, DROP_TYPE_NOT_ALLOWED, DROP_TYPE_RULE,
+    DROP_DUPLICATE, DROP_LOW_SCORE, DROP_WRONG_CHOICE_MARKING, DROP_UNKNOWN_LO_ID,
+)
+
+STATUS_PENDING = "pending"    # kept after generation, waiting for the evaluation
+STATUS_ACCEPTED = "accepted"
 
 WARNING_SECTION_WITHOUT_QUESTIONS = "section_without_questions"
+WARNING_CHOICE_MARKING = "choice_marking_wrong"
+WARNING_CHOICE_SHARE = "choice_share_low"
 
 
 @dataclass
 class BatchItems:
-    """Answer of one question generation call.
+    """Answer of one question generation call (or of the halves of a split call).
 
-    items       normalized items with lo_id
+    items       raw items with lo_id
     dropped     dropped items by reason (DROP_MISSING_LO_ID, DROP_INVALID_ITEM_SHAPE)
     no_content  lo_id -> reason, when the model said the section has no subject matter
                 (object {"lo_id": .., "reason": ..} without a question)
+    splits      how many times the batch was split because the answer was cut off
+    calls       generation calls made
     """
 
     items: list[dict] = field(default_factory=list)
     dropped: Counter = field(default_factory=Counter)
     no_content: dict = field(default_factory=dict)
+    splits: int = 0
+    calls: int = 0
+
+    def extend(self, other: "BatchItems") -> None:
+        self.items.extend(other.items)
+        self.dropped.update(other.dropped)
+        self.no_content.update(other.no_content)
+        self.splits += other.splits
+        self.calls += other.calls
 
 
 def _is_no_content_marker(item: dict) -> bool:
-    return "reason" in item and not str(item.get("otazka", "") or "").strip()
+    return "reason" in item and not str(item.get("description", "") or "").strip()
+
+
+def _section_blocks(los_batch, page_map, context_max_chars, verbose):
+    blocks = []
+    for lo in los_batch:
+        lo_id = lo.get("id")
+        context = build_context_for_lo(lo, page_map, max_chars=context_max_chars)
+        if not context.strip():
+            if verbose:
+                print(f"  LO {lo_id}: bez kontextu, preskakujem v tomto batche.")
+            continue
+        blocks.append({
+            "id": lo_id,
+            "name": lo.get("vzdelávací_objekt", ""),
+            "bloom": lo.get("bloom_level", ""),
+            "context": context,
+        })
+    return blocks
 
 
 def generate_items_for_batch(
@@ -91,52 +181,43 @@ def generate_items_for_batch(
     context_max_chars=None,
     *,
     settings: Settings,
-    per_section: int = DEFAULT_PER_SECTION,
+    question_settings: Optional[QuestionSettings] = None,
+    per_section: Optional[int] = None,
+    existing: Optional[dict] = None,
+    missing: Optional[dict] = None,
 ) -> BatchItems:
-    model = setting_or_default(model, "llm_model_questions", settings)
-    lo_blocks = []
-    for lo in los_batch:
-        lo_id = lo.get("id")
-        context = build_context_for_lo(lo, page_map, max_chars=context_max_chars)
-        if not context.strip():
-            if verbose:
-                print(f"  LO {lo_id}: bez kontextu, preskakujem v tomto batche.")
-            continue
-        lo_blocks.append({
-            "id": lo_id,
-            "name": lo.get("vzdelávací_objekt", ""),
-            "bloom": lo.get("bloom_level", ""),
-            "context": context,
-        })
+    """One generation call for the sections of `los_batch`.
 
-    if not lo_blocks:
+    existing=None: first call. existing={lo_id: [questions]}: extra round (missing=None) or
+    coverage call (missing={lo_id: count}); only the sections of this batch are listed.
+    An answer cut off at the token limit raises LLMError with `truncated` = True.
+    """
+    model = setting_or_default(model, "llm_model_questions", settings)
+    qs = question_settings or QuestionSettings.from_options(None, per_section)
+    blocks = _section_blocks(los_batch, page_map, context_max_chars, verbose)
+    if not blocks:
         return BatchItems()
 
-    parts = []
-    for i, block in enumerate(lo_blocks, start=1):
-        parts.append(
-            f"LO {i}:\n"
-            f"- lo_id: {block['id']}\n"
-            f"- nazov: {block['name']}\n"
-            f"- bloom_level: {block['bloom']}\n"
-            f"- text:\n\"\"\"{block['context']}\"\"\""
-        )
-    los_text = "\n\n".join(parts)
-
+    extra_section = ""
+    if existing is not None:
+        ids = [block["id"] for block in blocks]
+        listed = {lo_id: existing.get(lo_id, []) for lo_id in ids}
+        if missing is None:
+            extra_section = build_extra_round_section(listed, document_language)
+        else:
+            extra_section = build_coverage_section(listed, {i: missing.get(i, 1) for i in ids}, document_language)
     prompt = build_item_generation_prompt(
-        los_text,
-        document_language=document_language,
-        per_section=per_section,
+        build_lo_blocks(blocks, document_language), document_language, qs, settings, extra_section
     )
 
-    # Step 6: no `except Exception: return []` (the batch was retried and then left without
-    # questions); LLMError propagates. expect_list: an object instead of an array (e.g.
-    # {"items": [...]}) is invalid JSON too (repeated call, then LLMError), never an empty batch.
+    # Step 6: no `except Exception: return []`; LLMError propagates. items_key: an answer
+    # that is not {"items": [...]} is invalid JSON (repeated call, then LLMError).
     parsed = generate_json(
-        llm, prompt, role="questions", model=model, verbose=verbose, settings=settings, expect_list=True
+        llm, prompt, role="questions", model=model, verbose=verbose, settings=settings,
+        items_key="items", max_tokens=settings.llm_max_output_tokens,
     )
 
-    result = BatchItems()
+    result = BatchItems(calls=1)
     for item in parsed:
         if not isinstance(item, dict):
             result.dropped[DROP_INVALID_ITEM_SHAPE] += 1
@@ -145,40 +226,39 @@ def generate_items_for_batch(
             result.dropped[DROP_MISSING_LO_ID] += 1
             continue
         if _is_no_content_marker(item):
-            result.no_content[item.get("lo_id")] = str(item.get("reason", "")).strip()
+            if existing is None:
+                result.no_content[item.get("lo_id")] = str(item.get("reason", "")).strip()
             continue
-        result.items.append(normalize_generated_item(item))
+        result.items.append(item)
+    return result
+
+
+def generate_with_split(los_batch, page_map, *, verbose=False, **kwargs) -> BatchItems:
+    """generate_items_for_batch; an answer cut off at the token limit splits the batch in
+    half (recursively). A single section that does not fit raises the LLMError."""
+    try:
+        return generate_items_for_batch(los_batch, page_map, verbose=verbose, **kwargs)
+    except LLMError as error:
+        if not error.truncated or len(los_batch) <= 1:
+            raise
+    if verbose:
+        print(f"Odpoved odrezana pri {len(los_batch)} celkoch, delim batch na polovicu.")
+    half = (len(los_batch) + 1) // 2
+    result = BatchItems(splits=1)
+    result.extend(generate_with_split(los_batch[:half], page_map, verbose=verbose, **kwargs))
+    result.extend(generate_with_split(los_batch[half:], page_map, verbose=verbose, **kwargs))
     return result
 
 
 def evaluate_items_batch(items_batch, model=None, llm=None, verbose=True, document_language="sk", *, settings: Settings):
+    """Quality score 1-5 of the questions (role eval): {id: {"skore", "zdovodnenie"}}."""
     if not items_batch:
         return {}
     model = setting_or_default(model, "llm_model_eval", settings)
+    prompt = build_item_evaluation_prompt(evaluation_items_text(items_batch, document_language), document_language)
 
-    parts = []
-    for item in items_batch:
-        parts.append(
-            f"Item id: {item.get('id')}\n"
-            f"- lo_id: {item.get('lo_id')}\n"
-            f"- typ: {item.get('typ', '')}\n"
-            f"- otazka: {item.get('otazka', '')}\n"
-            f"- odpoved: {item.get('odpoved', '')}\n"
-            f"- napoveda: {item.get('napoveda', '')}\n"
-            f"- citovane_zdroje: {item.get('citovane_zdroje', [])}"
-        )
-    items_text = "\n\n".join(parts)
-
-    prompt = build_item_evaluation_prompt(items_text, document_language)
-
-    # Step 6: no `except Exception: return {}` (the questions then had no score and were
-    # filtered out); LLMError propagates.
-    parsed = generate_json(llm, prompt, role="eval", model=model, verbose=verbose, settings=settings)
-
-    if isinstance(parsed, dict):
-        parsed = [parsed]
-    if not isinstance(parsed, list):
-        return {}
+    # Step 6: no `except Exception: return {}`; LLMError propagates.
+    parsed = generate_json(llm, prompt, role="eval", model=model, verbose=verbose, settings=settings, items_key="items")
 
     evaluations = {}
     for raw in parsed:
@@ -200,15 +280,297 @@ def evaluate_items_batch(items_batch, model=None, llm=None, verbose=True, docume
 def item_sort_key(item, lo_order):
     lo_id = item.get("lo_id")
     lo_pos = lo_order.get(lo_id, float("inf"))
-    refs = parse_source_refs(item.get("citovane_zdroje", []))
+    refs = parse_source_refs(item.get("source", []))
     source_id, first_page = refs[0] if refs else ("", float("inf"))
     return (lo_pos, source_id or "", first_page, item.get("id", float("inf")))
 
 
 def attach_source_names(items, source_name_map):
     for item in items:
-        item["zdroj"] = resolve_source_names(item.get("citovane_zdroje", []), source_name_map)
+        item["source_files"] = resolve_source_names(item.get("source", []), source_name_map)
     return items
+
+
+def _chunks(values, size):
+    return [values[start:start + size] for start in range(0, len(values), size)]
+
+
+class _Progress:
+    """done / total of one step, monotonic; `estimate` units reserved for a sub-step."""
+
+    def __init__(self, callback, stage, total):
+        self.callback, self.stage, self.done, self.total = callback, stage, 0, total
+        report_progress(callback, stage, 0, total)
+
+    def grow(self, units):
+        self.total += units
+
+    def advance(self, units=1):
+        self.done = min(self.total, self.done + units)
+        report_progress(self.callback, self.stage, self.done, self.total)
+
+    def jump(self, done):
+        self.done = max(self.done, min(self.total, done))
+        report_progress(self.callback, self.stage, self.done, self.total)
+
+    def sub(self, estimate):
+        start = self.done
+
+        def callback(stage, done, _total):
+            report_progress(self.callback, stage, start + min(done, estimate), self.total)
+
+        return callback, start + estimate
+
+    def finish(self):
+        self.total = max(self.total, self.done)
+        self.done = self.total
+        report_progress(self.callback, self.stage, self.done, self.total)
+
+
+class _QuestionRun:
+    """State of one generate_all_items run."""
+
+    def __init__(self, los, segmenty, *, llm, embedder, settings, qs, language, generation_model,
+                 evaluation_model, batch_size, evaluation_batch_size, max_batch_attempts, max_eval_attempts,
+                 extra_rounds, verbose, progress_callback):
+        self.los = los
+        self.segmenty = segmenty
+        self.llm = llm
+        self.embedder = embedder
+        self.settings = settings
+        self.qs = qs
+        self.language = language
+        self.generation_model = generation_model
+        self.evaluation_model = evaluation_model
+        self.batch_size = batch_size
+        self.evaluation_batch_size = evaluation_batch_size
+        self.max_batch_attempts = max_batch_attempts
+        self.max_eval_attempts = max_eval_attempts
+        self.extra_rounds = extra_rounds
+        self.verbose = verbose
+        self.progress_callback = progress_callback
+
+        self.page_map = build_page_map(segmenty)
+        self.source_name_map = build_source_name_map(segmenty)
+        self.allowed_pages = build_allowed_source_refs(segmenty)
+        self.sections = {lo.get("id"): lo for lo in los}
+        self.valid_lo_ids = {lo.get("id") for lo in los if isinstance(lo.get("id"), int)}
+        self.dedup = SectionDeduplicator(settings.question_dedup_threshold, embedder, settings=settings,
+                                         verbose=verbose)
+
+        self.items: list[dict] = []
+        self.status: dict[int, str] = {}
+        self.next_id = 1
+        self.generation_dropped: Counter = Counter()
+        self.no_content: dict = {}
+        self.splits = 0
+        self.calls: Counter = Counter()
+        self.times_clamped = 0
+        self.duplicates_by_origin: Counter = Counter()
+        self.rounds: list[dict] = []
+        self.wrong_marking: list[dict] = []
+        self.generation_seconds = 0.0
+        self.evaluation_seconds = 0.0
+
+    # --- generation ---------------------------------------------------------------------
+
+    def generate(self, sections, origin, existing=None, missing=None) -> BatchItems:
+        result = generate_with_split(
+            sections,
+            self.page_map,
+            verbose=self.verbose,
+            document_language=self.language,
+            model=self.generation_model,
+            llm=self.llm,
+            context_max_chars=self.settings.context_max_chars,
+            settings=self.settings,
+            question_settings=self.qs,
+            existing=existing,
+            missing=missing,
+        )
+        self.generation_dropped.update(result.dropped)
+        self.no_content.update(result.no_content)
+        self.splits += result.splits
+        self.calls[origin.split("_")[0]] += result.calls
+        return result
+
+    def accept_new(self, result: BatchItems, origin: str) -> tuple[Counter, list[dict]]:
+        """Normalize, validate and deduplicate the items of one answer.
+
+        Returns (new questions per section, new questions); they wait for the evaluation."""
+        records = []
+        for raw in result.items:
+            section = self.sections.get(raw.get("lo_id"))
+            item, notes = normalize_generated_item(raw, section, self.qs, self.language)
+            item = {"id": self.next_id, **item, "origin": origin, "evaluation": {"score": None, "reason": ""}}
+            item["source_files"] = resolve_source_names(item["source"], self.source_name_map)
+            self.next_id += 1
+            self.times_clamped += int(notes["times_clamped"])
+            records.append(item)
+            self.items.append(item)
+
+        report = validate_items(records, allowed_pages=self.allowed_pages, valid_lo_ids=self.valid_lo_ids,
+                                question_settings=self.qs)
+        invalid = extract_prefixed_ids(report.get("errors", []), "Polozka")
+        candidates = []
+        for item in records:
+            if item["id"] in invalid:
+                self.status[item["id"]] = DROP_VALIDATION
+                continue
+            problem = type_permission_problem(item, self.qs, self.settings)
+            if problem:
+                self.status[item["id"]] = problem
+                continue
+            candidates.append(item)
+
+        new, duplicates = self.dedup.filter(candidates)
+        for item in duplicates:
+            self.status[item["id"]] = DROP_DUPLICATE
+            self.duplicates_by_origin[origin] += 1
+        for item in new:
+            self.status[item["id"]] = STATUS_PENDING
+        return Counter(item["lo_id"] for item in new), new
+
+    def existing_for(self, sections) -> dict:
+        ids = {lo.get("id") for lo in sections}
+        existing: dict = {lo_id: [] for lo_id in ids}
+        for item in self.items:
+            if item.get("lo_id") in ids and item.get("description"):
+                existing[item["lo_id"]].append(item)
+        return existing
+
+    def run_generation(self) -> list[dict]:
+        """Step 2 for all batches; returns the questions waiting for the evaluation."""
+        started = time.perf_counter()
+        batches = _chunks(self.los, self.batch_size)
+        per_batch = 1 + self.extra_rounds
+        progress = _Progress(self.progress_callback, STAGE_QUESTIONS, len(batches) * per_batch)
+        if self.verbose:
+            print(f"Začínam generovanie otázok pre {len(self.los)} celkov v batchoch po {self.batch_size}.")
+        pending: list[dict] = []
+        round_stats: dict[int, Counter] = {r: Counter() for r in range(1, self.extra_rounds + 1)}
+
+        for number, batch in enumerate(batches):
+            base = number * per_batch
+            if self.verbose:
+                print(f"\nBatch {number + 1}: LO id {[lo.get('id') for lo in batch]}")
+            new_counts, new = Counter(), []
+            for attempt in range(1, self.max_batch_attempts + 1):
+                result = self.generate(batch, ORIGIN_INITIAL)
+                if result.items:
+                    new_counts, new = self.accept_new(result, ORIGIN_INITIAL)
+                    break
+                if self.verbose and self.max_batch_attempts > 1:
+                    print(f"Batch {number + 1}: prazdny vystup, opakujem ({attempt}/{self.max_batch_attempts})")
+            pending.extend(new)
+            progress.jump(base + 1)
+
+            active = [lo for lo in batch if new_counts[lo.get("id")] > 0 and lo.get("id") not in self.no_content]
+            for round_no in range(1, self.extra_rounds + 1):
+                if not active:
+                    break
+                origin = extra_origin(round_no)
+                result = self.generate(active, origin, existing=self.existing_for(active))
+                counts, new = self.accept_new(result, origin)
+                pending.extend(new)
+                round_stats[round_no]["calls"] += result.calls
+                round_stats[round_no]["sections"] += len(active)
+                round_stats[round_no]["questions_added"] += len(new)
+                active = [lo for lo in active if counts[lo.get("id")] > 0]
+                round_stats[round_no]["sections_continuing"] += len(active)
+                progress.jump(base + 1 + round_no)
+            progress.jump(base + per_batch)
+
+        progress.finish()
+        self.rounds = [{"round": r, **{k: stats[k] for k in ("calls", "sections", "questions_added",
+                                                              "sections_continuing")}}
+                       for r, stats in round_stats.items()]
+        self.generation_seconds += time.perf_counter() - started
+        return pending
+
+    # --- evaluation -----------------------------------------------------------------------
+
+    def evaluate(self, pending: list[dict], progress: _Progress) -> tuple[dict, dict]:
+        """Quality score, faithfulness (+ choice marking), answerability and the filter.
+        Sets the status of every pending question to accepted or a drop reason."""
+        started = time.perf_counter()
+        for chunk in _chunks(pending, self.evaluation_batch_size):
+            scores = {}
+            for attempt in range(1, self.max_eval_attempts + 1):
+                scores = evaluate_items_batch(chunk, model=self.evaluation_model, llm=self.llm, verbose=self.verbose,
+                                              document_language=self.language, settings=self.settings)
+                if scores:
+                    break
+                if self.verbose and self.max_eval_attempts > 1:
+                    print(f"Hodnotenie prazdne, opakujem ({attempt}/{self.max_eval_attempts})")
+            for item in chunk:
+                score = scores.get(item["id"], {})
+                item["evaluation"] = {"score": score.get("skore"), "reason": score.get("zdovodnenie", "")}
+            progress.advance()
+
+        check_batches = batch_count(len(pending), self.evaluation_batch_size)
+        callback, end = progress.sub(check_batches)
+        faithfulness = analyze_item_faithfulness(
+            self.segmenty, pending, llm=self.llm, model=self.settings.llm_model, verbose=self.verbose,
+            batch_size=self.evaluation_batch_size, max_batch_attempts=self.settings.check_batch_attempts,
+            document_language=self.language, context_max_chars=self.settings.context_max_chars,
+            faithful_score=self.settings.question_faithful_score, progress_callback=callback, settings=self.settings,
+        )
+        progress.jump(end)
+        callback, end = progress.sub(check_batches)
+        answerability = analyze_item_answerability(
+            self.segmenty, pending, llm=self.llm, model=self.settings.llm_model, verbose=self.verbose,
+            batch_size=self.evaluation_batch_size, max_batch_attempts=self.settings.check_batch_attempts,
+            document_language=self.language, context_max_chars=self.settings.context_max_chars,
+            answerable_score=self.settings.question_answerable_score, progress_callback=callback,
+            settings=self.settings,
+        )
+        progress.jump(end)
+
+        marking = {row.get("item_id"): row for row in faithfulness.get("items", [])}
+        to_filter = []
+        for item in pending:
+            row = marking.get(item["id"]) or {}
+            if item.get("type") == "choice" and row.get("choices_ok") is False:
+                self.status[item["id"]] = DROP_WRONG_CHOICE_MARKING
+                self.wrong_marking.append({"item": item, "wrong_choices": row.get("wrong_choices", [])})
+                continue
+            to_filter.append(item)
+        accepted = filter_items_variant_b(
+            to_filter, {"errors": []}, faithfulness, answerability,
+            min_score=self.settings.question_min_score,
+            min_faithfulness_score=self.settings.question_min_faithfulness_score,
+            min_answerability_score=self.settings.question_min_answerability_score,
+        )
+        accepted_ids = {item["id"] for item in accepted}
+        for item in to_filter:
+            self.status[item["id"]] = STATUS_ACCEPTED if item["id"] in accepted_ids else DROP_LOW_SCORE
+        self.evaluation_seconds += time.perf_counter() - started
+        return faithfulness, answerability
+
+    def accepted_per_section(self) -> Counter:
+        return Counter(item["lo_id"] for item in self.items if self.status.get(item["id"]) == STATUS_ACCEPTED)
+
+    def evaluation_units(self, count: int) -> int:
+        return batch_count(count, self.evaluation_batch_size) * 3
+
+
+def merge_check_reports(reports: list[dict], kind: str) -> dict:
+    """Join faithfulness or answerability reports of several phases; stats from the rows."""
+    score_key, flag_key = f"{kind}_score", ("faithful" if kind == "faithfulness" else "answerable")
+    rows = [row for report in reports for row in report.get("items", [])]
+    scores = [row[score_key] for row in rows if isinstance(row.get(score_key), int)]
+    flagged = sum(1 for row in rows if row.get(flag_key))
+    return {
+        "stats": {
+            "items_total": sum(report.get("stats", {}).get("items_total", 0) for report in reports),
+            "items_evaluated": len(scores),
+            f"average_{kind}_score": round(sum(scores) / len(scores), 4) if scores else 0.0,
+            f"{flag_key}_items": flagged if scores else 0,
+            f"{flag_key}_items_percent": round(flagged / len(scores) * 100, 2) if scores else 0.0,
+        },
+        "items": rows,
+    }
 
 
 def generate_all_items(
@@ -229,274 +591,133 @@ def generate_all_items(
     *,
     settings: Settings,
     per_section: Optional[int] = None,
+    question_options: Optional[QuestionOptions] = None,
+    extra_rounds: Optional[int] = None,
 ) -> QuestionPipelineResult:
-    """Question pipeline: language, generation and scoring per LO batch, evaluation, filter.
+    """Question pipeline (see the module docstring).
 
-    per_section: options.questions.per_section, the MINIMUM of questions per section asked
-    in the prompt (not a limit); None = DEFAULT_PER_SECTION.
-    Sections without a generated question get one supplementary call with only those
-    sections; a section without a question at the end gets a section_without_questions
-    warning in reports["question_diagnostics"].
-
+    question_options: resolved options.questions (types, per_section, choice_options,
+    hints); None = the defaults of Príloha A. per_section overrides its per_section.
+    batch_size: sections per generation call (None = QGEN_QUESTION_GENERATION_BATCH_SIZE).
+    extra_rounds: None = QGEN_QUESTION_EXTRA_ROUNDS.
     document_language: None or "auto" = detect with the LLM; "sk" / "en" = use it.
-    Values not given (None) come from `settings` (required; the caller's settings, no get_settings()).
     llm / embedder = None: created by qgen.llm.factory per role.
     An LLM or embedding call that fails for good raises LLMError.
     """
-    batch_size = setting_or_default(batch_size, "question_batch_size", settings)
+    qs = QuestionSettings.from_options(question_options, per_section)
+    batch_size = setting_or_default(batch_size, "question_generation_batch_size", settings)
     evaluation_batch_size = setting_or_default(evaluation_batch_size, "question_eval_batch_size", settings)
     max_batch_attempts = setting_or_default(max_batch_attempts, "question_generation_attempts", settings)
     max_eval_attempts = setting_or_default(max_eval_attempts, "question_eval_attempts", settings)
+    extra_rounds = setting_or_default(extra_rounds, "question_extra_rounds", settings)
     generation_model = generation_model or model or settings.llm_model_questions
     evaluation_model = evaluation_model or model or settings.llm_model_eval
-    per_section = DEFAULT_PER_SECTION if per_section is None else per_section
 
-    page_map = build_page_map(segmenty)
-    source_name_map = build_source_name_map(segmenty)
     if verbose:
         print("Item pipeline: detekujem jazyk dokumentu.")
     language_info = resolve_document_language(
-        segmenty,
-        document_language,
-        llm=llm,
-        model=generation_model,
-        settings=settings,
-        verbose=verbose,
+        segmenty, document_language, llm=llm, model=generation_model, settings=settings, verbose=verbose,
+        progress_callback=progress_callback, role="questions",
+    )
+    language = language_info.get("language", "sk")
+    run = _QuestionRun(
+        los, segmenty, llm=llm, embedder=embedder, settings=settings, qs=qs, language=language,
+        generation_model=generation_model, evaluation_model=evaluation_model, batch_size=batch_size,
+        evaluation_batch_size=evaluation_batch_size, max_batch_attempts=max_batch_attempts,
+        max_eval_attempts=max_eval_attempts, extra_rounds=extra_rounds, verbose=verbose,
         progress_callback=progress_callback,
-        role="questions",
     )
-    document_language = language_info.get("language", "sk")
+
+    # 2. generation with extra rounds
+    pending = run.run_generation()
+
+    # 3. evaluation (+1 unit for the relevance at the end, +1 reserved for the coverage call)
+    progress = _Progress(progress_callback, STAGE_Q_EVALUATION, run.evaluation_units(len(pending)) + 2)
+    if verbose:
+        print("Item pipeline: hodnotenie a kontroly otázok.")
+    faithfulness_reports, answerability_reports = [], []
+    faithfulness, answerability = run.evaluate(pending, progress)
+    faithfulness_reports.append(faithfulness)
+    answerability_reports.append(answerability)
+
+    # 4. coverage: sections below per_section after the filter
+    accepted_before = run.accepted_per_section()
+    under_minimum = [lo for lo in los if accepted_before[lo.get("id")] < qs.per_section]
+    coverage_calls = 0
+    coverage_pending: list[dict] = []
+    if under_minimum:
+        if verbose:
+            print(f"\nDoplnam otazky pre celky pod minimom: {[lo.get('id') for lo in under_minimum]}")
+        chunks = _chunks(under_minimum, batch_size)
+        progress.grow(len(chunks) - 1)
+        started = time.perf_counter()
+        for chunk in chunks:
+            missing = {lo.get("id"): max(1, qs.per_section - accepted_before[lo.get("id")]) for lo in chunk}
+            result = run.generate(chunk, ORIGIN_COVERAGE, existing=run.existing_for(chunk), missing=missing)
+            coverage_calls += result.calls
+            _, new = run.accept_new(result, ORIGIN_COVERAGE)
+            coverage_pending.extend(new)
+            progress.advance()
+        run.generation_seconds += time.perf_counter() - started
+        if coverage_pending:
+            progress.grow(run.evaluation_units(len(coverage_pending)))
+            faithfulness, answerability = run.evaluate(coverage_pending, progress)
+            faithfulness_reports.append(faithfulness)
+            answerability_reports.append(answerability)
+    else:
+        progress.advance()
+    accepted_after = run.accepted_per_section()
+    filled = [lo.get("id") for lo in under_minimum if accepted_after[lo.get("id")] > accepted_before[lo.get("id")]]
+
+    # 5. relevance, order, ids
+    started = time.perf_counter()
     lo_order = {lo.get("id"): idx for idx, lo in enumerate(los)}
-    all_items = []
-    next_item_id = 1
-    total_los = len(los)
-    total_batches = batch_count(total_los, batch_size)
-    report_progress(progress_callback, STAGE_QUESTIONS, 0, total_batches)
-
-    if verbose:
-        print(f"Začínam generovanie položiek pre {total_los} LO v batchoch po {batch_size}.")
-    generation_seconds = 0.0
-    evaluation_seconds = 0.0
-    dropped = Counter()
-    no_content: dict = {}
-
-    def run_batch(batch, batch_label, attempts):
-        """Generate, record and score the questions of one batch of sections."""
-        nonlocal next_item_id, generation_seconds, evaluation_seconds
-        lo_ids = [lo.get("id") for lo in batch]
-        if verbose:
-            print(f"\nBatch {batch_label}: LO id {lo_ids}")
-        start_batch_generation = time.perf_counter()
-        batch_generation_seconds = 0.0
-        batch_evaluation_seconds = 0.0
-
-        raw_items = []
-        for attempt in range(1, attempts + 1):
-            generated = generate_items_for_batch(
-                batch,
-                page_map,
-                document_language=document_language,
-                model=generation_model,
-                llm=llm,
-                verbose=verbose,
-                context_max_chars=settings.context_max_chars,
-                settings=settings,
-                per_section=per_section,
-            )
-            dropped.update(generated.dropped)
-            no_content.update(generated.no_content)
-            raw_items = generated.items
-            if raw_items:
-                break
-            if verbose and attempts > 1:
-                print(f"Batch {batch_label}: prazdny vystup, opakujem ({attempt}/{attempts})")
-
-        if not raw_items:
-            if verbose:
-                print(f"Batch {batch_label}: LLM nevrátil žiadne položky.")
-        else:
-            created_batch_items = []
-            for raw in raw_items:
-                lo_id = raw.get("lo_id")
-                record = {
-                    "id": next_item_id,
-                    "lo_id": lo_id,
-                    "typ": raw.get("typ", ""),
-                    "otazka": raw.get("otazka", ""),
-                    "odpoved": raw.get("odpoved", ""),
-                    "napoveda": raw.get("napoveda", ""),
-                    "citovane_zdroje": raw.get("citovane_zdroje", [])
-                }
-                record["zdroj"] = resolve_source_names(record.get("citovane_zdroje", []), source_name_map)
-                created_batch_items.append(record)
-                all_items.append(record)
-                next_item_id += 1
-
-            batch_generation_seconds = time.perf_counter() - start_batch_generation
-            generation_seconds += batch_generation_seconds
-
-            start_batch_evaluation = time.perf_counter()
-            batch_eval = {}
-            for attempt in range(1, max_eval_attempts + 1):
-                batch_eval = evaluate_items_batch(
-                    created_batch_items,
-                    model=evaluation_model,
-                    llm=llm,
-                    verbose=verbose,
-                    document_language=document_language,
-                    settings=settings,
-                )
-                if batch_eval:
-                    break
-                if verbose and max_eval_attempts > 1:
-                    print(f"Batch {batch_label}: hodnotenie prazdne, opakujem ({attempt}/{max_eval_attempts})")
-
-            for record in created_batch_items:
-                item_eval = batch_eval.get(record["id"], {})
-                record["hodnotenie"] = {
-                    "skore": item_eval.get("skore"),
-                    "zdovodnenie": item_eval.get("zdovodnenie", "")
-                }
-            batch_evaluation_seconds = time.perf_counter() - start_batch_evaluation
-            evaluation_seconds += batch_evaluation_seconds
-
-            if verbose:
-                print(f"Batch {batch_label}: vytvorených položiek: {len(raw_items)}")
-        if not raw_items:
-            batch_generation_seconds = time.perf_counter() - start_batch_generation
-            generation_seconds += batch_generation_seconds
-
-        if verbose:
-            print(
-                f"Batch {batch_label} hotový. "
-                f"Generovanie: {batch_generation_seconds:.2f} s, "
-                f"evaluacia: {batch_evaluation_seconds:.2f} s"
-            )
-        return len(raw_items)
-
-    batch_num = 1
-    for start in range(0, total_los, batch_size):
-        run_batch(los[start:start + batch_size], batch_num, max_batch_attempts)
-        report_progress(progress_callback, STAGE_QUESTIONS, batch_num, total_batches)
-        batch_num += 1
-
-    # Coverage: sections without a generated question get one supplementary call with
-    # only those sections (same prompt), in chunks of batch_size.
-    covered = {item.get("lo_id") for item in all_items}
-    missing_sections = [lo for lo in los if lo.get("id") not in covered]
-    supplementary_calls = 0
-    if missing_sections:
-        if verbose:
-            print(f"\nDoplnam otazky pre LO bez otazky: {[lo.get('id') for lo in missing_sections]}")
-        for start in range(0, len(missing_sections), batch_size):
-            supplementary_calls += 1
-            run_batch(missing_sections[start:start + batch_size], f"doplnenie {supplementary_calls}", 1)
-
-    all_items.sort(key=lambda item: item_sort_key(item, lo_order))
-    for i, item in enumerate(all_items, start=1):
-        item["id"] = i
-    attach_source_names(all_items, source_name_map)
-
-    # Step q_evaluation: relevance (1 unit), faithfulness batches, answerability batches.
-    expected_check_batches = batch_count(len(all_items), evaluation_batch_size)
-    report_progress(progress_callback, STAGE_Q_EVALUATION, 0, 1 + 2 * expected_check_batches)
-    evaluation_start_reports = time.perf_counter()
-    if verbose:
-        print("Item pipeline: spustam validaciu a evaluacne reporty poloziek.")
-    allowed_pages = build_allowed_source_refs(segmenty)
-    valid_lo_ids = {lo.get("id") for lo in los if isinstance(lo.get("id"), int)}
-    item_validation_report = validate_items(
-        all_items,
-        allowed_pages=allowed_pages,
-        valid_lo_ids=valid_lo_ids,
-    )
+    all_items = sorted(run.items, key=lambda item: item_sort_key(item, lo_order))
+    new_ids = {item["id"]: position for position, item in enumerate(all_items, start=1)}
+    status = {new_ids[old]: reason for old, reason in run.status.items()}
+    for item in all_items:
+        item["id"] = new_ids[item["id"]]
+    attach_source_names(all_items, run.source_name_map)
+    item_faithfulness_report = _renumber_rows(merge_check_reports(faithfulness_reports, "faithfulness"), new_ids)
+    item_answerability_report = _renumber_rows(merge_check_reports(answerability_reports, "answerability"), new_ids)
+    item_validation_report = validate_items(all_items, allowed_pages=run.allowed_pages,
+                                            valid_lo_ids=run.valid_lo_ids, question_settings=qs)
     item_relevance_report = analyze_item_relevance_to_lo(
-        all_items,
-        los,
-        embedder=embedder,
-        embedding_model=settings.embed_model,
-        verbose=verbose,
-        settings=settings,
+        all_items, los, embedder=embedder, embedding_model=settings.embed_model, verbose=verbose, settings=settings,
     )
-    report_progress(progress_callback, STAGE_Q_EVALUATION, 1, 1 + 2 * expected_check_batches)
-    faithfulness_progress = SubProgress(progress_callback, before=1, after=expected_check_batches)
-    item_faithfulness_report = analyze_item_faithfulness(
-        segmenty,
-        all_items,
-        llm=llm,
-        model=settings.llm_model,
-        verbose=verbose,
-        batch_size=evaluation_batch_size,
-        max_batch_attempts=settings.check_batch_attempts,
-        document_language=document_language,
-        context_max_chars=settings.context_max_chars,
-        faithful_score=settings.question_faithful_score,
-        progress_callback=faithfulness_progress,
-        settings=settings,
-    )
-    answerability_progress = SubProgress(progress_callback, before=1 + faithfulness_progress.sub_total)
-    item_answerability_report = analyze_item_answerability(
-        segmenty,
-        all_items,
-        llm=llm,
-        model=settings.llm_model,
-        verbose=verbose,
-        batch_size=evaluation_batch_size,
-        max_batch_attempts=settings.check_batch_attempts,
-        document_language=document_language,
-        context_max_chars=settings.context_max_chars,
-        answerable_score=settings.question_answerable_score,
-        progress_callback=answerability_progress,
-        settings=settings,
-    )
-    q_evaluation_done = 1 + faithfulness_progress.sub_total + answerability_progress.sub_total
-    report_progress(progress_callback, STAGE_Q_EVALUATION, q_evaluation_done, q_evaluation_done)
-    accepted_items = filter_items_variant_b(
-        all_items,
-        item_validation_report,
-        item_faithfulness_report,
-        item_answerability_report,
-        min_score=settings.question_min_score,
-        min_faithfulness_score=settings.question_min_faithfulness_score,
-        min_answerability_score=settings.question_min_answerability_score,
-    )
-    normalized_items = normalize_accepted_items(accepted_items, valid_lo_ids)
-    attach_source_names(normalized_items, source_name_map)
-    evaluation_seconds += time.perf_counter() - evaluation_start_reports
-    diagnostics_report = build_question_diagnostics(
-        los,
-        all_items,
-        accepted_items,
-        normalized_items,
-        item_validation_report,
-        dropped,
-        no_content,
-        per_section=per_section,
-        missing_before_supplement=[lo.get("id") for lo in missing_sections],
-        supplementary_calls=supplementary_calls,
-    )
+    progress.finish()
 
+    accepted_items = [item for item in all_items if status.get(item["id"]) == STATUS_ACCEPTED]
+    normalized_items = normalize_accepted_items(accepted_items, run.valid_lo_ids)
+    run.evaluation_seconds += time.perf_counter() - started
+    all_questions = [{**item, "drop_reason": None if status.get(item["id"]) == STATUS_ACCEPTED
+                      else status.get(item["id"])} for item in all_items]
+
+    diagnostics_report = build_question_diagnostics(
+        los, all_items, status, normalized_items, run, qs,
+        under_minimum=[lo.get("id") for lo in under_minimum],
+        coverage_calls=coverage_calls, sections_filled=filled,
+        validation_report=item_validation_report,
+    )
     timing_report = {
         "pipeline": "items",
-        "generation_seconds": round(generation_seconds, 4),
-        "evaluation_seconds": round(evaluation_seconds, 4),
-        "total_seconds": round(generation_seconds + evaluation_seconds, 4),
+        "generation_seconds": round(run.generation_seconds, 4),
+        "evaluation_seconds": round(run.evaluation_seconds, 4),
+        "total_seconds": round(run.generation_seconds + run.evaluation_seconds, 4),
         "details": {
             "items_count_all": len(all_items),
             "items_count_accepted": len(normalized_items),
             "los_count": len(los),
-            "document_language": document_language,
+            "document_language": language,
             "document_language_reason": language_info.get("reason", ""),
         },
     }
-
     if verbose:
-        print(f"\nGenerovanie položiek pre všetky LO dokončené. Celkový počet položiek: {len(all_items)}")
-        print(f"Cas generovania položiek: {generation_seconds:.2f} s")
-        print(f"Cas evaluacie položiek: {evaluation_seconds:.2f} s")
+        print(f"\nGenerovanie otázok dokončené. Vygenerované: {len(all_items)}, prijaté: {len(normalized_items)}")
+        print(f"Cas generovania: {run.generation_seconds:.2f} s, cas hodnotenia: {run.evaluation_seconds:.2f} s")
     return QuestionPipelineResult(
         questions=normalized_items,
-        all_questions=all_items,
+        all_questions=all_questions,
         language_info=language_info,
         reports={
             "item_validation": item_validation_report,
@@ -509,39 +730,39 @@ def generate_all_items(
     )
 
 
+def _renumber_rows(report: dict, new_ids: dict) -> dict:
+    for row in report.get("items", []):
+        if row.get("item_id") in new_ids:
+            row["item_id"] = new_ids[row["item_id"]]
+    report["items"].sort(key=lambda row: row.get("item_id") or 0)
+    return report
+
+
 def _count_stats(values: list[int]) -> dict:
     if not values:
         return {"min": 0, "avg": 0.0, "max": 0}
     return {"min": min(values), "avg": round(sum(values) / len(values), 2), "max": max(values)}
 
 
-def build_question_diagnostics(
-    los,
-    all_items,
-    accepted_items,
-    normalized_items,
-    validation_report,
-    generation_dropped,
-    no_content,
-    *,
-    per_section,
-    missing_before_supplement,
-    supplementary_calls,
-) -> dict:
-    """Report question_diagnostics: dropped questions by reason, questions per section,
-    the supplementary call and the section_without_questions warnings.
+def _types(items) -> dict:
+    counts = Counter(item.get("type") for item in items)
+    return {question_type: counts.get(question_type, 0) for question_type in QUESTION_TYPES}
 
-    The reasons of the filter are taken from the same inputs as filter_items_variant_b:
-    an item it rejected is DROP_VALIDATION when validate_items flagged it, else DROP_LOW_SCORE.
-    """
+
+def build_question_diagnostics(
+    los, all_items, status, normalized_items, run: _QuestionRun, qs: QuestionSettings, *,
+    under_minimum, coverage_calls, sections_filled, validation_report,
+) -> dict:
+    """Report question_diagnostics: dropped questions by reason, questions per section and
+    type, extra rounds, duplicates, batch splits, the coverage call and the warnings."""
     by_reason = Counter({reason: 0 for reason in DROP_REASONS})
-    by_reason.update(generation_dropped)
-    invalid_ids = extract_prefixed_ids(validation_report.get("errors", []), "Polozka")
-    accepted_ids = {item.get("id") for item in accepted_items}
+    by_reason.update(run.generation_dropped)
+    accepted = [item for item in all_items if status.get(item["id"]) == STATUS_ACCEPTED]
     for item in all_items:
-        if item.get("id") not in accepted_ids:
-            by_reason[DROP_VALIDATION if item.get("id") in invalid_ids else DROP_LOW_SCORE] += 1
-    by_reason[DROP_UNKNOWN_LO_ID] += len(accepted_items) - len(normalized_items)
+        reason = status.get(item["id"])
+        if reason in DROP_REASONS:
+            by_reason[reason] += 1
+    by_reason[DROP_UNKNOWN_LO_ID] += len(accepted) - len(normalized_items)
 
     generated_per_section = Counter(item.get("lo_id") for item in all_items)
     accepted_per_section = Counter(item.get("lo_id") for item in normalized_items)
@@ -554,10 +775,10 @@ def build_question_diagnostics(
             continue
         if generated_per_section[lo_id]:
             stage = "filter"
-            reason = "all generated questions were dropped (validation or score filter)"
+            reason = "all generated questions were dropped (validation, type rules, duplicates or score filter)"
         else:
             stage = "generation"
-            reason = no_content.get(lo_id) or "the model returned no question, also not in the supplementary call"
+            reason = run.no_content.get(lo_id) or "the model returned no question, also not in the coverage call"
         bloom = lo.get("bloom_level", "")
         warnings.append({
             "code": WARNING_SECTION_WITHOUT_QUESTIONS,
@@ -567,10 +788,46 @@ def build_question_diagnostics(
             "stage": stage,
             "reason": reason,
         })
+    for entry in run.wrong_marking:
+        item = entry["item"]
+        letters = ", ".join(entry["wrong_choices"]) or "?"
+        warnings.append({
+            "code": WARNING_CHOICE_MARKING,
+            "message": f"Question {item['id']} (section {item.get('lo_id')}) dropped: option(s) {letters} marked wrongly",
+            "section_id": item.get("lo_id"),
+            "question_id": item["id"],
+        })
+    page_refs = sorted({w["item_id"] for w in validation_report.get("warning_items", [])
+                        if w.get("code") == WARNING_PAGE_REFERENCE and w.get("item_id") is not None})
+    if page_refs:
+        warnings.append({
+            "code": WARNING_PAGE_REFERENCE,
+            "message": f"{len(page_refs)} question(s) refer to pages or chapters of the document: {page_refs}",
+            "question_ids": page_refs,
+        })
+    low_share = []
+    if "choice" in qs.types and len(qs.types) > 1:
+        for lo_id in section_ids:
+            section_items = [item for item in normalized_items if item.get("lo_id") == lo_id]
+            if section_items:
+                share = sum(1 for item in section_items if item.get("type") == "choice") / len(section_items)
+                if share < run.settings.question_choice_min_share:
+                    low_share.append(lo_id)
+    if low_share:
+        warnings.append({
+            "code": WARNING_CHOICE_SHARE,
+            "message": (f"{len(low_share)} section(s) have less than "
+                        f"{int(round(run.settings.question_choice_min_share * 100))} % choice questions: {low_share}"),
+            "section_ids": low_share,
+        })
 
-    filled = [lo_id for lo_id in missing_before_supplement if generated_per_section[lo_id]]
+    origins = Counter(item.get("origin") for item in all_items)
     return {
-        "per_section_minimum": per_section,
+        "per_section_minimum": qs.per_section,
+        "question_options": {
+            "types": list(qs.types), "per_section": qs.per_section,
+            "choice_options": qs.choice_options, "hints": qs.hints,
+        },
         "sections_total": len(los),
         "questions_generated": len(all_items),
         "questions_accepted": len(normalized_items),
@@ -578,242 +835,43 @@ def build_question_diagnostics(
             "generated": _count_stats([generated_per_section[i] for i in section_ids]),
             "accepted": _count_stats([accepted_per_section[i] for i in section_ids]),
         },
-        "supplementary_call": {
-            "sections_missing": list(missing_before_supplement),
-            "calls": supplementary_calls,
-            "sections_filled": filled,
+        "question_types": {
+            "generated": _types(all_items),
+            "accepted": _types(normalized_items),
+            "practical_accepted": sum(1 for item in normalized_items if item.get("practical")),
         },
-        "sections_without_content": {str(k): v for k, v in no_content.items()},
+        "questions_by_origin": dict(origins),
+        "generation_calls": {
+            "initial": run.calls.get("initial", 0),
+            "extra": run.calls.get("extra", 0),
+            "coverage": run.calls.get("coverage", 0),
+        },
+        "extra_rounds": {
+            "configured": run.extra_rounds,
+            "rounds_run": sum(1 for r in run.rounds if r["calls"]),
+            "rounds": run.rounds,
+        },
+        "batch_splits": run.splits,
+        "dedup_threshold": run.settings.question_dedup_threshold,
+        "duplicates_removed": {
+            "total": sum(run.duplicates_by_origin.values()),
+            "by_origin": dict(run.duplicates_by_origin),
+        },
+        "wrong_choice_marking": len(run.wrong_marking),
+        "times_clamped": run.times_clamped,
+        "validation_warnings": dict(validation_report.get("warning_counts", {})),
+        "supplementary_call": {
+            "sections_missing": list(under_minimum),
+            "calls": coverage_calls,
+            "sections_filled": list(sections_filled),
+        },
+        "sections_without_content": {str(k): v for k, v in run.no_content.items()},
         "items_dropped": {
             "total": sum(by_reason.values()),
             "by_reason": dict(by_reason),
         },
         "warnings": warnings,
     }
-
-
-def build_item_generation_prompt(los_text, document_language, per_section=DEFAULT_PER_SECTION):
-    if document_language == "en":
-        return f"""
-You are an experienced teacher.
-Based on multiple learning objectives (LO) and their textual context from the study material,
-generate educational items (questions/tasks) for each LO.
-
-REQUIREMENTS:
-- For each LO, generate only items grounded in its text and focused on that learning objective.
-- Do NOT invent information that is not present in the text.
-- Every item must contain the field "lo_id".
-- For each LO, create at least {per_section} items; if the content allows, create more. This number is a minimum, not a limit.
-- For an LO with bloom_level Aplikovať, Analyzovať, Hodnotiť or Vytvoriť, create at least one item of type "prakticka_uloha" (without code).
-- Exception: only if the text of an LO really contains no subject matter, return for this LO a single object {{"lo_id": <id>, "reason": "<short reason>"}} with no other fields instead of items.
-- Write questions and tasks as standalone content-focused prompts, not as instructions to read or analyze the text.
-- Do NOT generate meta-phrasing such as "Read the text..." or "Based on the text...".
-- The question should target the subject matter directly.
-- Keep JSON field names exactly as specified below.
-- Because the source document is in English, write the content of the item, answer, and hint in English.
-- Fill testing-related fields only for practical Python tasks.
-- If the document is about C++, Java, JavaScript, C# or another language, the answer and code solution may use that language.
-- Python testing fields belong ONLY to tasks solved in Python.
-- If the solution is not in Python, set:
-  "execution_mode": "",
-  "function_name": "",
-  "automaticky_testovatelna": false,
-  "test_cases": []
-- Set "automaticky_testovatelna" to true only when the task can be reliably checked automatically.
-- GUI, interactive, graphical, web, or otherwise non-testable tasks must have "automaticky_testovatelna": false.
-- If the task is not programming-related or not suitable for automatic testing, set:
-  "jazyk": "",
-  "kod_riesenia": "",
-  "execution_mode": "",
-  "function_name": "",
-  "test_cases": [],
-  "automaticky_testovatelna": false
-- For practical Python tasks, provide runnable code in "kod_riesenia" and create 2 to 4 test cases.
-- Allowed execution_mode values for Python practical tasks:
-  "stdin_stdout" or "function"
-- If you use "function", also fill "function_name".
-- If you use "function", "kod_riesenia" may contain only function definitions plus optional imports or simple constants.
-- In "function" mode, "kod_riesenia" must not contain prints, demo calls, fixed test inputs, or executable code outside the function definition.
-
-Document classification:
-- is_python_document: false
-- reason: no justification
-
-HARD RULE:
-- If is_python_document = false, you must not generate Python practical tasks or Python tests.
-
-Learning objectives:
-{los_text}
-
-Output format:
-Return ONLY valid JSON as an array of objects.
-Each object must have:
-- "lo_id"
-- "typ": "teoreticka_otazka" or "prakticka_uloha"
-- "otazka"
-- "odpoved"
-- "napoveda"
-- "citovane_zdroje": source refs like ["D1:12","D2:13"]
-- "jazyk"
-- "kod_riesenia"
-- "execution_mode"
-- "function_name"
-- "automaticky_testovatelna"
-- "test_cases"
-
-Output:
-ONLY a JSON array with no extra text.
-"""
-    return f"""
-Si skusený učiteľ.
-Na zaklade viacerých vzdelávacích cieľov (LO) a ich textového kontextu z učebného materiálu
-vygeneruj vzdelávacie položky (otázky/úlohy) pre každý LO.
-
-POŽIADAVKY:
-- Pre každé LO generuj len položky, ktoré vychádzajú z jeho textu a sú tematicky zamerané na daný cieľ.
-- NEvymýšľaj informácie, ktoré nie sú v texte.
-- Pre každú položku vždy uveď, ku ktorému LO patrí, pomocou poľa "lo_id".
-- Pre každé LO vytvor najmenej tento počet položiek: {per_section}. Ak to obsah dovoľuje, vytvor viac – je to minimum, nie strop.
-- Pre LO s bloom_level Aplikovať, Analyzovať, Hodnotiť alebo Vytvoriť vytvor aspoň jednu položku typu "prakticka_uloha" (bez kódu).
-- Výnimka: iba ak text LO naozaj neobsahuje žiadne učivo, vráť pre toto LO namiesto položiek jediný objekt {{"lo_id": <id>, "reason": "<krátky dôvod>"}} bez ďalších polí.
-- Formuluj otázky a úlohy ako samostatné vecné zadania o téme, nie ako pokyny na prácu s textom.
-- NEGENERUJ meta-formulácie typu "Prečítaj si text...", "Na základe textu..." ani otázky pýtajúce sa, čo študent pochopil z textu.
-- Otázka má smerovať priamo na odborný obsah, napr. definíciu, rozdiel, príčinu, postup, vlastnosť, výpočet alebo aplikáciu.
-- Testovateľné polia vypĺňaj len pre praktické úlohy v Pythone.
-- Zohľadni jazyk zdrojového dokumentu.
-- Ak je dokument o C++, Java, JavaScript, C# alebo inom jazyku, odpoveď a kód riešenia môžeš napísať v tomto jazyku.
-- Do Python testovacej schémy patria LEN úlohy, ktorých riešenie je v jazyku Python, ak je dokument v inom jazyku tak testovacie polia nevyplnuj.
-- Ak riešenie nie je v Pythone, nastav:
-  "execution_mode": "",
-  "function_name": "",
-  "automaticky_testovatelna": false,
-  "test_cases": []
-- Pole "automaticky_testovatelna" nastav na true len vtedy, ak sa úloha dá spoľahlivo overiť automaticky cez vstup/výstup alebo volanie funkcie.
-- Ak ide o GUI, interaktívnu, grafickú, webovú alebo inak netestovateľnú úlohu (napr. tkinter, pygame, turtle, streamlit), nastav "automaticky_testovatelna": false.
-- Ak úloha nie je programovacia alebo nie je vhodná na automatické testovanie, nastav:
-  "jazyk": "",
-  "kod_riesenia": "",
-  "execution_mode": "",
-  "function_name": "",
-  "test_cases": [],
-  "automaticky_testovatelna": false
-- Ak ide o praktickú úlohu s Python kódom, uveď spustiteľný kód v poli "kod_riesenia" a vytvor 2 až 4 test cases.
-- Pre Python praktické úlohy používaj len tieto execution_mode:
-  "stdin_stdout" alebo "function"
-- Ak použiješ "function", doplň aj rovnake  "function_name" ktore sa ma použiť.
-- Ak použiješ "function", "kod_riesenia" musí obsahovať len definície funkcií a prípadne importy alebo jednoduché konštanty.
-- Pri "function" NESMIE "kod_riesenia" obsahovať printy, demo volania funkcie, pevne vložené testovacie vstupy ani spúšťací kód mimo definície funkcie.
-- Pri "function" sa vstupy dodávajú len cez "test_cases".
-
-Klasifikácia dokumentu:
-- is_python_document: false
-- reason: bez zdovodnenia
-
-TVRDÉ PRAVIDLO:
-- Ak is_python_document = false, NESMIEŠ generovať praktické úlohy s Python kódom ani Python testy.
-- Ak is_python_document = false a vytvoríš praktickú úlohu, musí byť bez kódu a bez testovacích polí:
-  "jazyk": "",
-  "kod_riesenia": "",
-  "execution_mode": "",
-  "function_name": "",
-  "automaticky_testovatelna": false,
-  "test_cases": []
-
-Zoznam LO:
-{los_text}
-
-Formát výstupu:
-Vráť LEN validný JSON – pole objektov.
-Každý objekt musí mať:
-- "lo_id": id vzdelávacieho objektu, ku ktorému položka patrí,
-- "typ": "teoreticka_otazka" alebo "prakticka_uloha",
-- "otazka": zadanie otázky alebo úlohy,
-- "odpoved": správna odpoveď alebo referenčné riešenie; ak ide o praktickú Python úlohu, pole MUSÍ obsahovať aj samotný kód riešenia, aby si ho používateľ vedel skopírovať,
-- "napoveda": krátka pomocná stopa pre študenta, NESMIE obsahovať finálnu odpoveď ani kľúčový výsledok. Napoveda má len nasmerovať, čo si má študent v texte pozrieť alebo aký postup zvoliť.
-- "citovane_zdroje": zoznam zdrojov vo formáte dokument:strana ako textové reťazce, napr. ["D1:12","D2:13"].
-- "jazyk": napr. "python" alebo prázdny reťazec.
-- "kod_riesenia": samostatný kód bez markdown ohraničenia alebo prázdny reťazec.
-- "execution_mode": "stdin_stdout", "function" alebo prázdny reťazec.
-- "function_name": názov funkcie pre execution_mode "function", inak prázdny reťazec.
-- "automaticky_testovatelna": true alebo false.
-- "test_cases": pole objektov; pre Python úlohy:
-  - pri "stdin_stdout": {{"input": "...", "expected_output": "..."}}
-  - pri "function": {{"input": [...], "expected_output": ...}}
-  Inak prázdne pole [].
-- Pre praktickú Python úlohu musia byť "odpoved" a "kod_riesenia" obsahovo konzistentné; "odpoved" má obsahovať kód alebo kód spolu s krátkym vysvetlením.
-
-Výstup:
-LEN JSON pole bez akéhokoľvek ďalšieho textu.
-"""
-
-
-def build_item_evaluation_prompt(items_text, document_language):
-    if document_language == "en":
-        return f"""
-You are a teacher evaluating the quality of educational items.
-For each item assign:
-- a score from 1 to 5 (1 = very weak, 5 = excellent)
-- a short justification in English (1-2 sentences)
-
-Evaluate according to:
-- factual correctness,
-- clarity of the question/task wording,
-- quality of the answer,
-- quality of the hint.
-
-Items to evaluate:
-{items_text}
-
-Return ONLY valid JSON as an array of objects:
-[
-  {{"id": 123, "skore": 4, "zdovodnenie": "short justification"}}
-]
-
-Output:
-ONLY a JSON array with no extra text.
-"""
-    return f"""
-Si učiteľ, ktorý hodnotí kvalitu vzdelávacích položiek.
-Pre každú položku priraď:
-- skore od 1 do 5 (1 = veľmi slabé, 5 = výborné)
-- krátke zdôvodnenie (1-2 vety)
-
-Hodnoť podľa:
-- vecnej správnosti,
-- jasnosti formulácie otázky/úlohy,
-- kvality odpovede (ak je to prakticka úloha, hodnoti aj kód a či sa dá spustiť),
-- vhodnosti nápovedy (nesmie prezrádzať finálne riešenie).
-
-Položky na hodnotenie:
-{items_text}
-
-Vráť LEN validný JSON ako pole objektov:
-[
-  {{"id": 123, "skore": 4, "zdovodnenie": "stručné zdôvodnenie"}}
-]
-
-Výstup:
-LEN JSON pole bez ďalšieho textu.
-"""
-
-
-def normalize_generated_item(item):
-    normalized = {
-        "lo_id": item.get("lo_id"),
-        "typ": str(item.get("typ", "")).strip(),
-        "otazka": str(item.get("otazka", "")).strip(),
-        "odpoved": item.get("odpoved", ""),
-        "napoveda": item.get("napoveda", ""),
-        "citovane_zdroje": normalize_sources(item.get("citovane_zdroje", [])),
-    }
-    return normalized
-
-
-def normalize_sources(value):
-    if isinstance(value, list):
-        return [str(v).strip() for v in value if str(v).strip()]
-    text = str(value).strip()
-    return [text] if text else []
 
 
 def filter_items_variant_b(
@@ -875,11 +933,8 @@ def normalize_accepted_items(items, valid_lo_ids):
 
 
 def get_item_score(item):
-    hodnotenie = item.get("hodnotenie", {})
-    if isinstance(hodnotenie, dict):
-        score = hodnotenie.get("skore")
-    else:
-        score = item.get("hodnotenie_skore")
+    evaluation = item.get("evaluation", {})
+    score = evaluation.get("score") if isinstance(evaluation, dict) else None
     try:
         return int(score)
     except (TypeError, ValueError):

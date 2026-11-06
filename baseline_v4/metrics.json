@@ -1,0 +1,260 @@
+{
+  "created_at": "2026-11-06T07:47:07+00:00",
+  "run": {
+    "started_at": "2026-11-06T07:39:26+00:00",
+    "git_commit": "9e1eddfb60120148e39e12d94917b588d2ae6ab2",
+    "git_dirty": true,
+    "models_source": "settings",
+    "llm_provider": "gemini",
+    "embed_provider": "gemini",
+    "models_by_role": {
+      "lo": "gemini-3.1-flash-lite",
+      "prereq": "gemini-3.1-flash-lite",
+      "questions": "gemini-3.1-flash-lite",
+      "eval": "gemini-3.5-flash",
+      "check": "gemini-3.1-flash-lite",
+      "topics": "gemini-3.1-flash-lite",
+      "split": "gemini-3.1-flash-lite",
+      "embed": "gemini-embedding-001"
+    }
+  },
+  "inputs": [
+    {
+      "name": "eko.pdf",
+      "sha256": "69075eae95e33be4fa3ef5938a4f7f61079477b37b623aae24c59a595ecf15e0"
+    }
+  ],
+  "models": {
+    "lo_generation": "gemini-3.1-flash-lite",
+    "lo_prerequisites": "gemini-3.1-flash-lite",
+    "item_generation": "gemini-3.1-flash-lite",
+    "item_evaluation": "gemini-3.5-flash",
+    "item_evaluation_batch_size": 20,
+    "lo_batch_size": 10,
+    "item_batch_size": 3
+  },
+  "document_language": "sk",
+  "topic_coverage": {
+    "coverage_percent": 100.0,
+    "topics_total": 8,
+    "topics_covered": 8,
+    "similarity_threshold": 0.72
+  },
+  "lo_faithfulness": {
+    "average_faithfulness_score": 5.0,
+    "los_evaluated": 42
+  },
+  "lo_relevance_to_segment": {
+    "average_similarity": 0.8012
+  },
+  "item_faithfulness": {
+    "average_faithfulness_score": 4.9529,
+    "items_evaluated": 170,
+    "faithful_items_percent": 98.82
+  },
+  "item_answerability": {
+    "average_answerability_score": 4.7647,
+    "items_evaluated": 170,
+    "answerable_items_percent": 94.12
+  },
+  "item_relevance_to_lo": {
+    "average_similarity": 0.7813
+  },
+  "counts": {
+    "pages": 69,
+    "los_all": 42,
+    "los_accepted": 42,
+    "items_all": 176,
+    "items_accepted": 167
+  },
+  "timings_seconds": {
+    "extraction": 0.6935,
+    "lo_pipeline_wall": 38.4728,
+    "lo_generation": 24.6893,
+    "lo_evaluation": 12.8339,
+    "item_pipeline_wall": 421.3998,
+    "item_generation": 167.774,
+    "item_evaluation": 252.8775,
+    "total_wall": 460.6261
+  },
+  "llm_calls": {
+    "by_method": {
+      "generate_content": 78,
+      "embed_content": 42
+    },
+    "failed": 0
+  },
+  "questions": {
+    "settings": {
+      "question_generation_batch_size": 3,
+      "question_extra_rounds": 1,
+      "question_dedup_threshold": 0.95,
+      "llm_temperature": 0.2,
+      "llm_max_output_tokens": 32768
+    },
+    "types_generated": {
+      "choice": 124,
+      "open": 46,
+      "no_answer": 6
+    },
+    "types_accepted": {
+      "choice": 117,
+      "open": 44,
+      "no_answer": 6
+    },
+    "practical_accepted": 38,
+    "extra_rounds_run": 1,
+    "extra_rounds": [
+      {
+        "round": 1,
+        "calls": 14,
+        "sections": 42,
+        "questions_added": 42,
+        "sections_continuing": 34
+      }
+    ],
+    "generation_calls": {
+      "initial": 14,
+      "extra": 14,
+      "coverage": 1
+    },
+    "batch_splits": 0,
+    "duplicates_removed": 6,
+    "wrong_choice_marking": 2
+  },
+  "section_diagnostics": {
+    "sections_generated": 50,
+    "sections_after_clustering": 42,
+    "sections_accepted": 42
+  },
+  "question_diagnostics": {
+    "per_section_minimum": 3,
+    "question_options": {
+      "types": [
+        "choice",
+        "open",
+        "no_answer"
+      ],
+      "per_section": 3,
+      "choice_options": 4,
+      "hints": 2
+    },
+    "sections_total": 42,
+    "questions_generated": 176,
+    "questions_accepted": 167,
+    "questions_per_section": {
+      "generated": {
+        "min": 3,
+        "avg": 4.19,
+        "max": 6
+      },
+      "accepted": {
+        "min": 3,
+        "avg": 3.98,
+        "max": 6
+      }
+    },
+    "question_types": {
+      "generated": {
+        "choice": 124,
+        "open": 46,
+        "no_answer": 6
+      },
+      "accepted": {
+        "choice": 117,
+        "open": 44,
+        "no_answer": 6
+      },
+      "practical_accepted": 38
+    },
+    "questions_by_origin": {
+      "initial": 127,
+      "extra_1": 47,
+      "coverage": 2
+    },
+    "generation_calls": {
+      "initial": 14,
+      "extra": 14,
+      "coverage": 1
+    },
+    "extra_rounds": {
+      "configured": 1,
+      "rounds_run": 1,
+      "rounds": [
+        {
+          "round": 1,
+          "calls": 14,
+          "sections": 42,
+          "questions_added": 42,
+          "sections_continuing": 34
+        }
+      ]
+    },
+    "batch_splits": 0,
+    "dedup_threshold": 0.95,
+    "duplicates_removed": {
+      "total": 6,
+      "by_origin": {
+        "extra_1": 5,
+        "coverage": 1
+      }
+    },
+    "wrong_choice_marking": 2,
+    "times_clamped": 0,
+    "validation_warnings": {},
+    "supplementary_call": {
+      "sections_missing": [
+        41
+      ],
+      "calls": 1,
+      "sections_filled": [
+        41
+      ]
+    },
+    "items_dropped": {
+      "total": 9,
+      "by_reason": {
+        "missing_lo_id": 0,
+        "invalid_item_shape": 0,
+        "validation": 0,
+        "type_not_allowed": 0,
+        "type_rule": 0,
+        "duplicate": 6,
+        "low_score": 1,
+        "wrong_choice_marking": 2,
+        "unknown_lo_id": 0
+      }
+    },
+    "warnings": [
+      {
+        "code": "choice_marking_wrong",
+        "message": "Question 1 (section 1) dropped: option(s) C marked wrongly",
+        "section_id": 1,
+        "question_id": 1
+      },
+      {
+        "code": "choice_marking_wrong",
+        "message": "Question 38 (section 9) dropped: option(s) A marked wrongly",
+        "section_id": 9,
+        "question_id": 38
+      },
+      {
+        "code": "choice_share_low",
+        "message": "11 section(s) have less than 60 % choice questions: [3, 8, 13, 14, 17, 27, 29, 32, 38, 39, 42]",
+        "section_ids": [
+          3,
+          8,
+          13,
+          14,
+          17,
+          27,
+          29,
+          32,
+          38,
+          39,
+          42
+        ]
+      }
+    ]
+  }
+}

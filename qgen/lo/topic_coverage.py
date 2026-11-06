@@ -89,10 +89,10 @@ def extract_document_topics(
     prompt = f"""
 Si učiteľ. Z nasledujúceho učebného materiálu identifikuj hlavné témy dokumentu.
 
-Vráť LEN validný JSON ako pole objektov v tvare:
-[
+Vráť LEN validný JSON objekt {{"items": [...]}}, kde "items" je pole objektov v tvare:
+{{"items": [
   {{"tema": "Názov témy"}}
-]
+]}}
 
 Pravidlá:
 - vráť najdôležitejšie témy
@@ -105,12 +105,9 @@ Materiál:
 """
 
     # Step 6: no `except Exception: return []` (document without topics); LLMError propagates.
-    parsed = generate_json(llm, prompt, role="topics", model=model, verbose=verbose, settings=settings)
-
-    if isinstance(parsed, dict):
-        parsed = [parsed]
-    if not isinstance(parsed, list):
-        return []
+    parsed = generate_json(
+        llm, prompt, role="topics", model=model, verbose=verbose, settings=settings, items_key="items"
+    )
 
     seen = set()
     topics = []

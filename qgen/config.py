@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(
         default=8192, ge=1, description="Anthropic: max_tokens of a call (required by the Messages API)."
     )
+    llm_max_output_tokens: int = Field(
+        default=32768, ge=1, description="Output token limit of question generation calls (all providers)."
+    )
+    llm_temperature: float = Field(default=0.2, ge=0, le=2, description="Sent with every call (not to Anthropic).")
     llm_max_concurrency: int = Field(default=4, ge=1, description="Parallel LLM calls of one worker.")
     llm_retries: int = Field(default=5, ge=1, description="Attempts of one LLM / embedding call (incl. the first).")
     llm_retry_delay_s: float = Field(
@@ -109,7 +113,9 @@ class Settings(BaseSettings):
 
     # --- Pipeline batches, attempts and text limits --------------------------------------
     lo_batch_size: int = Field(default=10, ge=1, description="Pages per LO generation call; LO per faithfulness call.")
-    question_batch_size: int = Field(default=10, ge=1, description="LO per question generation call.")
+    question_generation_batch_size: int = Field(
+        default=3, ge=1, description="Sections per question generation call (also extra rounds and coverage)."
+    )
     question_eval_batch_size: int = Field(default=20, ge=1, description="Questions per faithfulness/answerability call.")
     question_generation_attempts: int = Field(default=3, ge=1)
     question_eval_attempts: int = Field(default=2, ge=1)
@@ -117,6 +123,23 @@ class Settings(BaseSettings):
     context_max_chars: int = Field(default=8000, ge=1, description="Source text for one LO or question.")
     language_sample_max_chars: int = Field(default=12000, ge=1, description="Text for language detection.")
     topic_source_max_chars: int = Field(default=20000, ge=1, description="Text for topic extraction.")
+
+    # --- Question generation (krok 13) -------------------------------------------------------
+    question_extra_rounds: int = Field(
+        default=1, ge=0, le=5, description="Extra generation rounds per batch; 0 = off."
+    )
+    question_dedup_threshold: float = Field(
+        default=0.95, ge=0, le=1, description="Cosine similarity at which a question of the same section is a duplicate."
+    )
+    question_choice_min_share: float = Field(
+        default=0.6, ge=0, le=1, description="Share of choice questions per section asked in the prompt."
+    )
+    question_practical_bloom: str = Field(
+        default="apply,analyze,evaluate,create", description="Section Bloom levels that also get a practical task."
+    )
+    question_no_answer_bloom: str = Field(
+        default="evaluate,create", description="Question Bloom levels allowed for no_answer."
+    )
 
     # --- Option defaults ------------------------------------------------------------------
     ocr_enabled: bool = False
@@ -169,6 +192,14 @@ class Settings(BaseSettings):
     @property
     def allowed_webhook_hosts(self) -> set[str]:
         return {host.lower() for host in _split_list(self.webhook_allowed_hosts)}
+
+    @property
+    def practical_bloom_levels(self) -> tuple[str, ...]:
+        return tuple(level.lower() for level in _split_list(self.question_practical_bloom))
+
+    @property
+    def no_answer_bloom_levels(self) -> tuple[str, ...]:
+        return tuple(level.lower() for level in _split_list(self.question_no_answer_bloom))
 
     @property
     def max_upload_bytes(self) -> int:

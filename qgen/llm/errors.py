@@ -40,8 +40,23 @@ class LLMTimeoutError(ProviderError):
         super().__init__(message, retryable=True, status=None)
 
 
+class OutputTruncatedError(ProviderError):
+    """The answer was cut off at the output token limit (Gemini finish_reason MAX_TOKENS,
+    OpenAI finish_reason "length", Anthropic stop_reason "max_tokens").
+
+    Not retried: the same prompt would be cut off again. qgen.llm.retry turns it into an
+    LLMError with `truncated` = True; question generation then splits its batch.
+    """
+
+    def __init__(self, message: str = "LLM answer cut off at the output token limit"):
+        super().__init__(message, retryable=False, status=None)
+
+
 class LLMError(Exception):
-    """An LLM or embedding call failed for good. Job error code: llm_error."""
+    """An LLM or embedding call failed for good. Job error code: llm_error.
+
+    `truncated`: the cause is OutputTruncatedError (the answer hit the output token limit).
+    """
 
     code = "llm_error"
 
@@ -61,6 +76,10 @@ class LLMError(Exception):
         self.cause = cause
         self.invalid_json = invalid_json
         self.attempts = attempts
+
+    @property
+    def truncated(self) -> bool:
+        return isinstance(self.cause, OutputTruncatedError)
 
 
 class LLMConfigError(ValueError):

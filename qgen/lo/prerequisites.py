@@ -70,7 +70,7 @@ def infer_prerequisites_for_group(
         prompt = f"""
 You are a teacher. Infer prerequisite relationships between the following learning objectives.
 All of these objectives belong to the same document group: {list(signature)}.
-Return JSON: an array of objects {{"id": number, "prerekvizity": [list of ids that must come before it]}}.
+Return a JSON object {{"items": [...]}} where "items" is an array of objects {{"id": number, "prerekvizity": [list of ids that must come before it]}}.
 Do not create cycles.
 Use only ids from the list below.
 Keep the JSON field name exactly as "prerekvizity".
@@ -82,7 +82,7 @@ Learning objectives:
         prompt = f"""
 Si ucitel. Pre nasledujuci zoznam vzdelavacich cielov navrhni dopln vsetky prerekvizity medzi nimi.
 Vsetky tieto ciele patria do rovnakej skupiny dokumentov: {list(signature)}.
-Vrat JSON: pole objektov {{"id": cislo, "prerekvizity": [zoznam id, ktore musia byt predtym]}}.
+Vrat JSON objekt {{"items": [...]}}, kde "items" je pole objektov {{"id": cislo, "prerekvizity": [zoznam id, ktore musia byt predtym]}}.
 Nedavaj cykly.
 Pouzivaj iba id zo zoznamu cielov, ktore su uvedene nizsie.
 
@@ -91,14 +91,12 @@ Zoznam cielov:
 """
     # Step 6: no `except Exception: return {}` (LO silently without prerequisites);
     # LLMError propagates.
-    parsed = generate_json(llm, prompt, role="prereq", model=model, verbose=verbose, settings=settings)
-    if isinstance(parsed, dict):
-        parsed = [parsed]
+    parsed = generate_json(
+        llm, prompt, role="prereq", model=model, verbose=verbose, settings=settings, items_key="items"
+    )
 
     valid_ids = {obj.get("id") for obj in group}
     mapping = {}
-    if not isinstance(parsed, list):
-        return mapping
 
     for item in parsed:
         if not isinstance(item, dict):

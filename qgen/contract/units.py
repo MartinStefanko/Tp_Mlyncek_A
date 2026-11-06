@@ -83,24 +83,41 @@ class Question(_ContractModel):
 
     @model_validator(mode="after")
     def _check_type_rules(self) -> "Question":
-        if self.type == "choice":
-            if len(self.choices) < 2:
-                raise ValueError("choice question needs at least 2 choices")
-            if not any(c.is_correct for c in self.choices):
-                raise ValueError("choice question needs at least 1 correct choice")
-            seen: set[str] = set()
-            for choice in self.choices:
-                key = " ".join(choice.text.split()).casefold()
-                if key in seen:
-                    raise ValueError(f"choice question has duplicate choice text: {choice.text!r}")
-                seen.add(key)
-        elif self.type == "open":
-            if len(self.choices) != 1 or not self.choices[0].is_correct:
-                raise ValueError("open question needs exactly 1 choice with is_correct=true")
-        elif self.type == "no_answer":
-            if self.choices:
-                raise ValueError("no_answer question must have empty choices")
+        errors = type_rule_errors(self.type, [(c.text, c.is_correct) for c in self.choices])
+        if errors:
+            raise ValueError(errors[0])
         return self
+
+
+def choice_key(text: str) -> str:
+    """Text of a choice for the duplicate check: whitespace collapsed, case folded."""
+    return " ".join(text.split()).casefold()
+
+
+def type_rule_errors(question_type: str, choices: list[tuple[str, bool]]) -> list[str]:
+    """Rules of the question types (kap. 7) on (text, is_correct) pairs; [] when they hold.
+
+    Used by the Question validator and by the validation of the question pipeline, so the
+    rules exist only once.
+    """
+    if question_type == "choice":
+        if len(choices) < 2:
+            return ["choice question needs at least 2 choices"]
+        if not any(correct for _, correct in choices):
+            return ["choice question needs at least 1 correct choice"]
+        seen: set[str] = set()
+        for text, _ in choices:
+            key = choice_key(text)
+            if key in seen:
+                return [f"choice question has duplicate choice text: {text!r}"]
+            seen.add(key)
+    elif question_type == "open":
+        if len(choices) != 1 or not choices[0][1]:
+            return ["open question needs exactly 1 choice with is_correct=true"]
+    elif question_type == "no_answer":
+        if choices:
+            return ["no_answer question must have empty choices"]
+    return []
 
 
 class Unit(_ContractModel):

@@ -10,18 +10,13 @@ PLACEHOLDER_API_KEY is sent instead.
 
 generate sends:
     messages         the prompt as one user message
-    temperature      always (there is no baseline recorded with this adapter)
-    max_tokens       only when the caller gives it
-    response_format  NOT sent yet (JSON_MODE_ENABLED = False, decision of step 7).
-safe_load_json and one repeated call stay in qgen.llm.retry.
-
-Open point (step 7), same as the Gemini adapter: json_mode is not sent. OpenAI's
-{"type": "json_object"} allows only a JSON object at the top level, but 13 of the 14
-pipeline prompts ask for a JSON array (only language detection asks for an object), and
-qgen.llm.retry always calls with json_mode=True. With the mode on, the pipeline would get
-{"items": [...]} instead of a list. The mapping json_mode -> response_format is ready
-below; switch JSON_MODE_ENABLED on together with prompts that return an object (and a new
-baseline). OpenAI also requires the word "JSON" in the messages; every prompt has it.
+    temperature      always (QGEN_LLM_TEMPERATURE)
+    max_tokens       only when the caller gives it (question generation)
+    response_format  {"type": "json_object"} when json_mode=True. Since step 13 every prompt
+                     asks for a JSON object ({"items": [...]} or the language object), and
+                     every prompt contains the word "JSON", as OpenAI requires.
+safe_load_json and one repeated call stay in qgen.llm.retry. An answer that ended at the
+token limit (finish_reason "length") raises OutputTruncatedError (not retried).
 
 Timeout: QGEN_LLM_TIMEOUT_S (seconds) as the client timeout. The SDK's own retries are off
 (max_retries=0); qgen.llm.retry retries.
@@ -42,11 +37,10 @@ import openai
 
 from qgen.llm.adapters._http import status_error
 from qgen.llm.base import LLMResponse
-from qgen.llm.errors import LLMConfigError, LLMTimeoutError, ProviderError
+from qgen.llm.errors import LLMConfigError, LLMTimeoutError, OutputTruncatedError, ProviderError
 
 PROVIDER = "OpenAI-compatible"
 PLACEHOLDER_API_KEY = "no-key"  # sent when the key is empty (local server)
-JSON_MODE_ENABLED = False  # see the open point in the module docstring
 
 
 def build_client(base_url: Optional[str], api_key: str, timeout_s: Optional[float]) -> Any:
@@ -87,6 +81,11 @@ def _response_text(response: Any) -> str:
         return ""
     message = getattr(choices[0], "message", None)
     return getattr(message, "content", None) or ""
+
+
+def _truncated(response: Any) -> bool:
+    choices = getattr(response, "choices", None) or []
+    return bool(choices) and getattr(choices[0], "finish_reason", None) == "length"
 
 
 def _usage(response: Any) -> dict[str, int]:
@@ -133,9 +132,11 @@ class OpenAICompatLLM:
         }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
-        if json_mode and JSON_MODE_ENABLED:
+        if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         response = _call(self._client.chat.completions.create, **kwargs)
+        if _truncated(response):
+            raise OutputTruncatedError(f"{PROVIDER} answer cut off (finish_reason length)")
         answered_by = getattr(response, "model", None)
         return LLMResponse(
             text=_response_text(response),

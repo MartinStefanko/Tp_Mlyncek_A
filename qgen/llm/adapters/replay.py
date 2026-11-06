@@ -25,7 +25,9 @@ Optional ``transforms`` (tests only) change the recorded inputs before the key i
 computed, to accept a deliberate, named change in a prompt.
 
 Recorded failures: an ``error`` record raises a retryable ``ProviderError`` (as a transient
-API error would); a ``text_error`` record (blocked / empty answer) gives text "".
+API error would), except type ``OutputTruncatedError``, which is raised again as it is (the
+question pipeline then splits its batch, as in the recorded run); a ``text_error`` record
+(blocked / empty answer) gives text "".
 
 ReplayLLM options (QGEN_LLM_REPLAY_*):
     delay_s           sleep before every call, so a container can be killed during a run
@@ -49,16 +51,18 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
 from qgen.llm.base import LLMResponse
-from qgen.llm.errors import ProviderError
+from qgen.llm.errors import OutputTruncatedError, ProviderError
 
 PREVIEW_CHARS = 1500
 GENERATE = "generate_content"
 EMBED = "embed_content"
 
-# First lines of the question generation prompt (build_item_generation_prompt, sk / en).
+# First lines of the question generation prompt (qgen.questions.prompts.GENERATION_MARKERS,
+# sk / en); a test keeps them in sync. Plain strings: this module imports nothing from qgen
+# outside qgen.llm.
 QUESTION_PROMPT_MARKERS = (
-    "vygeneruj vzdelávacie položky (otázky/úlohy)",
-    "generate educational items (questions/tasks)",
+    "Z tematických celkov učebného materiálu a ich textu vytvor otázky a úlohy pre študentov.",
+    "From the sections of the study material and their text, create questions and tasks for students.",
 )
 
 
@@ -119,6 +123,8 @@ class UnrecordedCallError(BaseException):
 def _raise_recorded_error(record: dict) -> None:
     if "error" in record:
         err = record["error"]
+        if err.get("type") == "OutputTruncatedError":
+            raise OutputTruncatedError(f"[replayed] {err.get('message')}")
         raise ProviderError(f"[replayed {err.get('type')}] {err.get('message')}", retryable=True)
 
 

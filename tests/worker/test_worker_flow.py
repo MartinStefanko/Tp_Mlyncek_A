@@ -44,12 +44,17 @@ def test_post_worker_completed_result_and_report(env):
     units, report = _result_and_report(env, job_id)
     assert len(units.units) == 1
     questions = units.units[0].questions
-    assert len(questions) == 3 == len(report.question_meta)
+    # 3 sections x (choice, choice, open); the types come straight from the pipeline
+    assert len(questions) == 9 == len(report.question_meta)
+    assert [q.type for q in questions[:3]] == ["choice", "choice", "open"]
     first = questions[0]
-    assert (first.type, first.time_to_handle, first.time_to_explain) == ("open", 300, 0)
-    assert first.name == "Fotosyntéza"
-    assert first.choices[0].is_correct and first.choices[0].text == "Odpoveď."
-    assert first.hints[0].url == "<p>Pozri &lt;b&gt;definíciu&lt;/b&gt;.</p>"  # escaped, then cleaned
+    assert (first.type, first.time_to_handle, first.time_to_explain) == ("choice", 60, 30)
+    assert first.name == "Otázka 1"
+    assert [c.is_correct for c in first.choices] == [True, False, False, False]
+    # one hint -> name "Nápoveda"; <b> is not an allowed tag, nh3 removes it
+    assert [h.model_dump() for h in first.hints] == [{"name": "Nápoveda", "url": "<p>Pozri definíciu.</p>"}]
+    assert [h.name for h in questions[1].hints] == ["Ľahká nápoveda", "Ťažká nápoveda"]
+    assert questions[2].choices[0].text == "Odpoveď 3/1."
     assert [s.id for s in report.sections] == ["S-1", "S-2", "S-3"]
     meta = report.question_meta[0]
     assert (meta.unit, meta.question, meta.section_id, meta.bloom_level) == (0, 0, "S-1", "understand")
@@ -116,7 +121,10 @@ def test_options_reach_the_pipeline(env, ocr):
     env.work()
     assert calls["ocr"] is ocr
     assert calls["inputs"][0]["name"] == "bio.pdf" and calls["inputs"][0]["path"].endswith("D1.pdf")
-    assert (calls["language"], calls["per_section"]) == ("en", 5)
+    assert calls["language"] == "en"
+    question_options = calls["question_options"]
+    assert (question_options.per_section, question_options.types) == (5, ["choice", "open", "no_answer"])
+    assert (question_options.choice_options, question_options.hints) == (4, 2)
     assert env.status(job_id)["status"] == "failed"
 
 

@@ -1,14 +1,14 @@
 """Google Gemini adapter (google-genai). The only module in the project that imports google.genai.
 
-The calls are the same as before step 6, so the baseline recording stays valid:
-    client.models.generate_content(model=..., contents=prompt)
+Calls:
+    client.models.generate_content(model=..., contents=prompt, config=GenerateContentConfig(...))
     client.models.embed_content(model=..., contents=texts)
-No `config` is passed to either call.
-
-Open point (step 6): `json_mode`, `temperature` and `max_tokens` of `generate` are NOT sent
-to the API yet (no GenerateContentConfig, so no response_mime_type="application/json",
-no temperature). The baseline was recorded without them; sending them changes the model
-output and needs a new baseline. The pipeline still parses the answer with safe_load_json.
+generate sends (step 13, baseline_v4):
+    response_mime_type  "application/json" when json_mode=True (every prompt returns an object)
+    temperature         always (QGEN_LLM_TEMPERATURE)
+    max_output_tokens   only when the caller gives it (question generation)
+An answer that ended at the token limit (finish_reason MAX_TOKENS) raises
+OutputTruncatedError (not retried). The pipeline still parses the answer with safe_load_json.
 
 Timeout: set once on the client with HttpOptions(timeout=...). google-genai takes it in
 MILLISECONDS (HttpOptions.timeout: "Timeout for the request in milliseconds"); the setting
@@ -34,7 +34,7 @@ from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 
 from qgen.llm.base import LLMResponse
-from qgen.llm.errors import LLMTimeoutError, ProviderError, RateLimitError
+from qgen.llm.errors import LLMTimeoutError, OutputTruncatedError, ProviderError, RateLimitError
 
 try:  # google-genai uses httpx2 (a fork with its own exception classes) when it is installed
     import httpx2
@@ -126,6 +126,25 @@ def _response_text(response: Any) -> str:
     return text or ""
 
 
+def _truncated(response: Any) -> bool:
+    """finish_reason MAX_TOKENS of the first candidate (enum or plain string)."""
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return False
+    reason = getattr(candidates[0], "finish_reason", None)
+    name = getattr(reason, "name", None) or str(reason or "")
+    return name.upper().endswith("MAX_TOKENS")
+
+
+def build_config(json_mode: bool, temperature: float, max_tokens: Optional[int]) -> Any:
+    kwargs: dict[str, Any] = {"temperature": temperature}
+    if json_mode:
+        kwargs["response_mime_type"] = "application/json"
+    if max_tokens is not None:
+        kwargs["max_output_tokens"] = max_tokens
+    return genai_types.GenerateContentConfig(**kwargs)
+
+
 def _usage(response: Any) -> dict[str, int]:
     meta = getattr(response, "usage_metadata", None)
     if meta is None:
@@ -165,7 +184,7 @@ def _vectors(response: Any, expected: int) -> list[list[float]]:
 
 
 class GeminiLLM:
-    """LLMClient for Gemini. See the module docstring for the open point on json_mode."""
+    """LLMClient for Gemini. JSON mode, temperature and the token limit go in the config."""
 
     def __init__(self, api_key: str = "", timeout_s: Optional[float] = None, client: Any = None):
         self._client = client if client is not None else build_client(api_key, timeout_s)
@@ -179,14 +198,16 @@ class GeminiLLM:
         temperature: float = 0.2,
         max_tokens: Optional[int] = None,
     ) -> LLMResponse:
-        # json_mode / temperature / max_tokens are intentionally not sent (open point above).
+        config = build_config(json_mode, temperature, max_tokens)
         try:
-            response = self._client.models.generate_content(model=model, contents=prompt)
+            response = self._client.models.generate_content(model=model, contents=prompt, config=config)
         except Exception as error:
             translated = translate_error(error)
             if translated is error:
                 raise
             raise translated from error
+        if _truncated(response):
+            raise OutputTruncatedError("Gemini answer cut off (finish_reason MAX_TOKENS)")
         return LLMResponse(text=_response_text(response), model=model, usage=_usage(response))
 
 

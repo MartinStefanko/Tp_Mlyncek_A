@@ -29,12 +29,12 @@ SEGMENTS = [
     {"page": 1, "source_id": "D1", "source_name": "a.pdf", "text": "Fotosyntéza je proces v rastlinách."},
     {"page": 2, "source_id": "D1", "source_name": "a.pdf", "text": "Dýchanie rastlín uvoľňuje energiu."},
 ]
-TWO_LO = json.dumps([
+TWO_LO = json.dumps({"items": [
     {"vzdelávací_objekt": "Fotosyntéza", "bloom_level": "Pochopiť", "odporúčané_aktivity": ["čítanie"],
      "odporúčané_zadania": "Vysvetli fotosyntézu.", "citovane_zdroje": ["D1:1"]},
     {"vzdelávací_objekt": "Dýchanie", "bloom_level": "Pochopiť", "odporúčané_aktivity": ["čítanie"],
      "odporúčané_zadania": "Opíš dýchanie.", "citovane_zdroje": ["D1:2"]},
-], ensure_ascii=False)
+]}, ensure_ascii=False)
 
 
 @pytest.fixture
@@ -310,14 +310,57 @@ def test_gemini_calls_the_api_like_before():
     usage = SimpleNamespace(prompt_token_count=10, candidates_token_count=5, total_token_count=15)
     models = _FakeModels(SimpleNamespace(text="[1]", usage_metadata=usage))
     llm = gemini.GeminiLLM(client=SimpleNamespace(models=models))
-    response = llm.generate("prompt", model="gemini-x", json_mode=True, temperature=0.9)
-    assert models.calls == [("generate_content", {"model": "gemini-x", "contents": "prompt"})]
+    response = llm.generate("prompt", model="gemini-x", json_mode=True, temperature=0.9, max_tokens=1234)
+    # Step 13: JSON mode, temperature and the output token limit go in the config.
+    (method, call), = models.calls
+    assert (method, call["model"], call["contents"]) == ("generate_content", "gemini-x", "prompt")
+    config = call["config"]
+    assert (config.response_mime_type, config.temperature, config.max_output_tokens) == ("application/json", 0.9, 1234)
+    llm.generate("prompt", model="gemini-x", json_mode=False)
+    config = models.calls[-1][1]["config"]
+    assert (config.response_mime_type, config.temperature, config.max_output_tokens) == (None, 0.2, None)
     assert response == LLMResponse("[1]", "gemini-x", {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
 
     emb_models = _FakeModels(SimpleNamespace(embeddings=[SimpleNamespace(values=[1, 2]), SimpleNamespace(values=[3, 4])]))
     embedder = gemini.GeminiEmbedder(client=SimpleNamespace(models=emb_models))
     assert embedder.embed(["a", "b"], model="emb") == [[1, 2], [3, 4]]
     assert emb_models.calls == [("embed_content", {"model": "emb", "contents": ["a", "b"]})]
+
+
+def test_gemini_finish_reason_max_tokens_is_truncated():
+    from qgen.llm.errors import OutputTruncatedError
+
+    gemini = _gemini()
+    for reason in ("MAX_TOKENS", SimpleNamespace(name="MAX_TOKENS")):
+        response = SimpleNamespace(text='{"items": [', candidates=[SimpleNamespace(finish_reason=reason)])
+        llm = gemini.GeminiLLM(client=SimpleNamespace(models=_FakeModels(response)))
+        with pytest.raises(OutputTruncatedError):
+            llm.generate("p", model="m")
+    ok = SimpleNamespace(text="{}", candidates=[SimpleNamespace(finish_reason="STOP")])
+    assert gemini.GeminiLLM(client=SimpleNamespace(models=_FakeModels(ok))).generate("p", model="m").text == "{}"
+
+
+def test_truncated_answer_is_not_retried(settings, sleeps):
+    from tests.fakes import truncated
+
+    llm = FakeLLM([truncated(), "{}"])
+    with pytest.raises(LLMError) as info:
+        retry.generate_json(llm, "p", role="questions", model="m", settings=settings, items_key="items")
+    assert info.value.truncated and len(llm.calls) == 1 and sleeps == []
+
+
+def test_temperature_and_max_tokens_reach_the_client(settings):
+    seen = {}
+
+    class Client:
+        def generate(self, prompt, *, model, json_mode=True, temperature=0.2, max_tokens=None):
+            seen.update(json_mode=json_mode, temperature=temperature, max_tokens=max_tokens)
+            return LLMResponse('{"items": []}', model)
+
+    custom = Settings.model_construct(llm_temperature=0.7)
+    assert retry.generate_json(Client(), "p", role="questions", model="m", settings=custom,
+                               items_key="items", max_tokens=99) == []
+    assert seen == {"json_mode": True, "temperature": 0.7, "max_tokens": 99}
 
 
 def test_gemini_empty_answer_is_empty_text():

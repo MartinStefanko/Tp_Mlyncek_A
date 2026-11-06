@@ -2,6 +2,7 @@ from qgen.context_builder import build_context_for_sources, build_page_map
 from qgen.config import Settings, setting_or_default
 from qgen.llm.retry import generate_json
 from qgen.progress import STAGE_Q_EVALUATION, batch_count, report_progress
+from qgen.questions.prompts import question_record_text
 
 
 def analyze_item_faithfulness(
@@ -46,10 +47,12 @@ def analyze_item_faithfulness(
         row = {
             "item_id": item.get("id"),
             "lo_id": item.get("lo_id"),
-            "source_pages": item.get("citovane_zdroje", []),
+            "source_pages": item.get("source", []),
             "faithfulness_score": None,
             "faithful": False,
             "reason": "",
+            "choices_ok": None,
+            "wrong_choices": [],
         }
         report["items"].append(row)
 
@@ -60,7 +63,7 @@ def analyze_item_faithfulness(
         comparable_items.append({
             "row": row,
             "item_id": item.get("id"),
-            "item_text": item_to_text(item),
+            "item_text": item_to_text(item, document_language),
             "source_text": source_text,
         })
 
@@ -90,6 +93,8 @@ def analyze_item_faithfulness(
             row = item["row"]
             row["faithfulness_score"] = evaluation.get("skore")
             row["reason"] = evaluation.get("zdovodnenie", "")
+            row["choices_ok"] = evaluation.get("choices_ok")
+            row["wrong_choices"] = evaluation.get("wrong_choices", [])
             if isinstance(row["faithfulness_score"], int):
                 scores.append(row["faithfulness_score"])
                 row["faithful"] = row["faithfulness_score"] >= faithful_score
@@ -108,56 +113,23 @@ def analyze_item_faithfulness(
 def evaluate_item_faithfulness_batch(
     batch, llm=None, model=None, verbose: bool = True, document_language: str = "sk", *, settings: Settings
 ):
+    labels = ("Question and answer", "Source") if document_language == "en" else ("Otázka a odpoveď", "Zdroj")
     parts = []
     for item in batch:
         parts.append(
             f"ITEM ID: {item['item_id']}\n"
-            f"Otazka a odpoved:\n\"\"\"{item['item_text']}\"\"\"\n\n"
-            f"Zdroj:\n\"\"\"{item['source_text']}\"\"\""
+            f"{labels[0]}:\n\"\"\"{item['item_text']}\"\"\"\n\n"
+            f"{labels[1]}:\n\"\"\"{item['source_text']}\"\"\""
         )
     joined = "\n\n-----\n\n".join(parts)
-
-    if document_language == "en":
-        prompt = f"""
-Assess the faithfulness of each answer against its source.
-
-Score 1-5:
-1 = the answer contains unsupported claims
-5 = the answer is fully supported by the source
-
-Records:
-{joined}
-
-Return ONLY valid JSON as an array of objects:
-[
-  {{"item_id": 1, "skore": 1, "zdovodnenie": "short justification in English"}}
-]
-"""
-    else:
-        prompt = f"""
-Posud faithfulness odpovede voci zdroju pre kazdy zaznam.
-
-Skore 1-5:
-1 = odpoved obsahuje nepodlozene tvrdenia
-5 = odpoved je plne podlozena zdrojom
-
-Zaznamy:
-{joined}
-
-Vrat LEN validny JSON ako pole objektov:
-[
-  {{"item_id": 1, "skore": 1, "zdovodnenie": "kratke zdovodnenie"}}
-]
-"""
+    template = FAITHFULNESS_EN if document_language == "en" else FAITHFULNESS_SK
+    prompt = template.replace("<<records>>", joined)
 
     # Step 6: no `except Exception: return None` (the questions then lost their score and
-    # were filtered out); LLMError propagates.
-    parsed = generate_json(llm, prompt, role="check", model=model, verbose=verbose, settings=settings)
-
-    if isinstance(parsed, dict):
-        parsed = [parsed]
-    if not isinstance(parsed, list):
-        return {}
+    # were filtered out); LLMError propagates. Step 13: the answer is {"items": [...]}.
+    parsed = generate_json(
+        llm, prompt, role="check", model=model, verbose=verbose, settings=settings, items_key="items"
+    )
 
     evaluations = {}
     for row in parsed:
@@ -169,17 +141,57 @@ Vrat LEN validny JSON ako pole objektov:
         except (TypeError, ValueError):
             continue
         reason = str(row.get("zdovodnenie", "")).strip()
-        evaluations[item_id] = {"skore": max(1, min(5, score)), "zdovodnenie": reason}
+        choices_ok = row.get("choices_ok")
+        wrong = row.get("wrong_choices")
+        evaluations[item_id] = {
+            "skore": max(1, min(5, score)),
+            "zdovodnenie": reason,
+            # Missing or not a bool = not checked (counts as ok in the filter).
+            "choices_ok": choices_ok if isinstance(choices_ok, bool) else None,
+            "wrong_choices": [str(w).strip() for w in wrong if str(w).strip()] if isinstance(wrong, list) else [],
+        }
     return evaluations
 
 
-def item_to_text(item):
-    parts = [
-        f"otazka: {item.get('otazka', '')}",
-        f"odpoved: {item.get('odpoved', '')}",
-    ]
-    return "\n".join(parts)
+def item_to_text(item, document_language: str = "sk"):
+    """Type, question and answer; choice options marked [správna] / [nesprávna]."""
+    return question_record_text(item, document_language, marks=True)
 
 
 def build_context_for_item(item, page_map, max_chars=None):
-    return build_context_for_sources(item.get("citovane_zdroje", []), page_map, max_chars=max_chars)
+    return build_context_for_sources(item.get("source", []), page_map, max_chars=max_chars)
+
+
+FAITHFULNESS_SK = """
+Posúď vernosť (faithfulness) každej otázky voči jej zdroju.
+
+Skóre 1–5:
+1 = odpoveď alebo zadanie obsahuje tvrdenia, ktoré zdroj nepodporuje
+5 = všetko je plne podložené zdrojom
+Pri "choice" posudzuj správne možnosti. Pri "no_answer" (úloha bez odpovede) posúď, či zadanie vychádza z učiva zdroja.
+
+Pri "choice" navyše skontroluj označenie každej možnosti: "choices_ok" je true, ak každá možnosť označená [správna] je podľa zdroja naozaj správna a každá [nesprávna] je naozaj nesprávna. Inak je "choices_ok" false a "wrong_choices" obsahuje písmená zle označených možností. Pri ostatných typoch je "choices_ok" true a "wrong_choices" [].
+
+Záznamy:
+<<records>>
+
+Vráť LEN validný JSON objekt bez ďalšieho textu:
+{"items": [{"item_id": 1, "skore": 1, "zdovodnenie": "krátke zdôvodnenie", "choices_ok": true, "wrong_choices": []}]}
+"""
+
+FAITHFULNESS_EN = """
+Assess the faithfulness of each question against its source.
+
+Score 1-5:
+1 = the answer or the question contains claims the source does not support
+5 = everything is fully supported by the source
+For "choice" assess the correct options. For "no_answer" (a task without an answer) assess whether the task is based on the subject matter of the source.
+
+For "choice" also check the marking of every option: "choices_ok" is true when every option marked [correct] really is correct according to the source and every option marked [wrong] really is wrong. Otherwise "choices_ok" is false and "wrong_choices" lists the letters of the wrongly marked options. For the other types "choices_ok" is true and "wrong_choices" is [].
+
+Records:
+<<records>>
+
+Return ONLY a valid JSON object with no extra text:
+{"items": [{"item_id": 1, "skore": 1, "zdovodnenie": "short justification in English", "choices_ok": true, "wrong_choices": []}]}
+"""

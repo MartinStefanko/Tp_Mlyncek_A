@@ -32,9 +32,16 @@ def _section(lo_id, name, bloom="Pochopiť", prerequisites=()):
             "citovane_zdroje": [f"D1:{lo_id}"], "prerekvizity": list(prerequisites)}
 
 
-def _question(lo_id, otazka="Čo je to?", odpoved="Toto.", napoveda="Pozri.", zdroje=("D1:1",), typ="teoreticka_otazka"):
-    return {"id": lo_id, "lo_id": lo_id, "typ": typ, "otazka": otazka, "odpoved": odpoved,
-            "napoveda": napoveda, "citovane_zdroje": list(zdroje)}
+def _question(lo_id, description="Čo je to?", answer="Toto.", hints=("<p>Pozri.</p>",), zdroje=("D1:1",),
+              question_type="open", name="", bloom="understand", keywords=("pojem",), choices=None):
+    """A question in the internal format of the pipeline (qgen.questions.types)."""
+    if choices is None:
+        choices = [{"text": answer, "is_correct": True}] if question_type == "open" else []
+    names = ("Ľahká nápoveda", "Ťažká nápoveda")
+    return {"id": lo_id, "lo_id": lo_id, "name": name, "description": description, "type": question_type,
+            "time_to_handle": 300, "time_to_explain": 60,
+            "hints": [{"name": n, "url": h} for n, h in zip(names, hints)], "choices": choices,
+            "bloom_level": bloom, "keywords": list(keywords), "source": list(zdroje), "practical": False}
 
 
 def _result(sections, questions, reports=None) -> PipelineResult:
@@ -45,22 +52,29 @@ def _result(sections, questions, reports=None) -> PipelineResult:
 def test_question_mapping_and_meta():
     sections = [_section(1, "Fotosyntéza"), _section(2, "Dýchanie", "Vytvoriť", [1])]
     questions = [
-        _question(1, zdroje=("D1:2", "D2:5", "D1:2")),
-        _question(2, typ="prakticka_uloha", odpoved="Riešenie krok za krokom.", napoveda=""),
+        _question(1, zdroje=("D1:2", "D2:5", "D1:2"), hints=('<p onclick="x">Pozri.</p>',)),
+        _question(2, name="Výpočet", answer="Riešenie krok za krokom.", hints=(), bloom="create"),
+        _question(1, question_type="choice", keywords=("a", "b"), choices=[
+            {"text": "Áno", "is_correct": True}, {"text": "Nie", "is_correct": False}]),
     ]
     out = build_output(_result(sections, questions), _record("bio.pdf", "chem.pdf"), timings={"extract": 1.0})
 
     unit = out.result.units[0]
     assert unit.title == "bio, chem"
     assert unit.description == "Tematické celky: Fotosyntéza, Dýchanie"
-    first, second = unit.questions
+    first, second, third = unit.questions
+    # empty name -> section title; the HTML of the hints is cleaned
     assert (first.name, first.description, first.type) == ("Fotosyntéza", "Čo je to?", "open")
+    assert (first.time_to_handle, first.time_to_explain) == (300, 60)
     assert [c.model_dump() for c in first.choices] == [{"text": "Toto.", "is_correct": True}]
-    assert first.hints[0].model_dump() == {"name": "Nápoveda", "url": "<p>Pozri.</p>"}
-    assert second.type == "open" and second.hints == [] and second.choices[0].text.startswith("Riešenie")
+    assert first.hints[0].model_dump() == {"name": "Ľahká nápoveda", "url": "<p>Pozri.</p>"}
+    assert second.name == "Výpočet" and second.hints == [] and second.choices[0].text.startswith("Riešenie")
+    assert third.type == "choice" and [c.is_correct for c in third.choices] == [True, False]
 
     meta = out.report.question_meta
-    assert [(m.question, m.section_id, m.bloom_level) for m in meta] == [(0, "S-1", "understand"), (1, "S-2", "create")]
+    assert [(m.question, m.section_id, m.bloom_level) for m in meta] == [
+        (0, "S-1", "understand"), (1, "S-2", "create"), (2, "S-1", "understand")]
+    assert meta[2].keywords == ["a", "b"]
     assert [(s.file, s.pages) for s in meta[0].source] == [("bio.pdf", [2]), ("chem.pdf", [5])]
     assert out.report.sections[1].prerequisites == ["S-1"]
     assert out.report.sections[0].lo_type == "legacy"
@@ -68,7 +82,7 @@ def test_question_mapping_and_meta():
 
 
 def test_invalid_question_is_left_out_with_a_warning():
-    questions = [_question(1), _question(1, otazka="x" * 5000), _question(1, odpoved="")]
+    questions = [_question(1), _question(1, description="x" * 5000), _question(1, answer="")]
     out = build_output(_result([_section(1, "A")], questions), _record("a.pdf"), timings={})
     assert len(out.result.units[0].questions) == 1 and out.dropped == 2
     codes = [w.code for w in out.report.warnings]
@@ -78,7 +92,8 @@ def test_invalid_question_is_left_out_with_a_warning():
 
 
 def test_unknown_bloom_level_warns():
-    out = build_output(_result([_section(1, "A", bloom="Zázrak")], [_question(1)]), _record("a.pdf"), timings={})
+    out = build_output(_result([_section(1, "A", bloom="Zázrak")], [_question(1, bloom="")]), _record("a.pdf"),
+                       timings={})
     assert out.report.question_meta[0].bloom_level == "understand"
     assert out.report.warnings[0].code == "unknown_bloom_level"
 

@@ -1,25 +1,21 @@
-"""DOČASNÉ (TEMPORARY) mapping of today's pipeline output to the API contract.
+"""DOČASNÉ (TEMPORARY) mapping of the pipeline output to the API contract.
 
-Step 14 replaces this module by the real output step (new question types from the LLM,
-split into lessons, shortening by the LLM). Until then the worker maps the current
-questions and sections (tematické celky, "LO" in the original code) as follows
-(kap. 6 – Mapovanie zo súčasného výstupu):
+Step 14 replaces this module by the real output step (split into lessons, length limits
+and shortening by the LLM, full report). Since step 13 the pipeline returns the questions
+in the contract shape (qgen.questions.types), so the mapping is:
 
     units           one lesson (split "single"); title = names of the input PDFs,
                     description = list of section titles
-    name            title of the question's section, cut at a word end (no LLM name yet)
-    description     otazka
-    type            teoreticka_otazka and prakticka_uloha → "open" (no choices exist yet)
-    choices         [{text: odpoved, is_correct: true}]
-    hints           napoveda → [{name: "Nápoveda", url: "<p>…</p>"}] (HTML cleaned by nh3)
-    time_*          defaults by type (kap. 7): open 300 / 0
+    name            name from the LLM, cut at a word end at 255 characters
+                    (empty: title of the question's section)
+    description, type, time_*, choices   as returned by the pipeline
+    hints           as returned by the pipeline; url (HTML) cleaned by nh3
 
 A question that does not pass the units contract is left out with a report warning.
 The report: sections from the accepted sections, question_meta per question, quality
 converted (x − 1) / 4 and coverage / 100, warnings, timings.
 """
 
-import html
 from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any, Optional
@@ -39,32 +35,12 @@ from qgen.contract.units import (
     Unit,
 )
 from qgen.pipeline import PipelineResult
+from qgen.questions.types import BLOOM_FALLBACK, BLOOM_LEVELS, DEFAULT_TIMES, contract_part
 from service.jobs.models import JobRecord
 
-# Default times per type in seconds (kap. 7): (time_to_handle, time_to_explain).
-DEFAULT_TIMES: dict[str, tuple[int, int]] = {"choice": (120, 30), "open": (300, 0), "no_answer": (300, 0)}
-LEGACY_TYPES: dict[str, str] = {"teoreticka_otazka": "open", "prakticka_uloha": "open"}
-HINT_NAME = "Nápoveda"
 HINT_TAGS = {"p", "br", "strong", "em", "ul", "ol", "li", "code", "pre", "sub", "sup"}
 LEGACY_LO_TYPE = "legacy"
-
-BLOOM_LEVELS: dict[str, str] = {
-    "zapamätať si": "remember",
-    "zapamätať": "remember",
-    "pochopiť": "understand",
-    "porozumieť": "understand",
-    "aplikovať": "apply",
-    "analyzovať": "analyze",
-    "hodnotiť": "evaluate",
-    "vytvoriť": "create",
-    "remember": "remember",
-    "understand": "understand",
-    "apply": "apply",
-    "analyze": "analyze",
-    "evaluate": "evaluate",
-    "create": "create",
-}
-BLOOM_FALLBACK = "understand"
+__all__ = ["BLOOM_FALLBACK", "BLOOM_LEVELS", "DEFAULT_TIMES", "build_output", "clean_hint_html", "cut_at_word"]
 
 
 @dataclass
@@ -108,15 +84,15 @@ def build_output(pipeline_result: PipelineResult, record: JobRecord, *, timings:
             dropped += 1
             warnings.append(ReportWarning(code=problem, message=f"Question {position} was left out: {problem}."))
             continue
-        bloom = _bloom(section, warnings, position)
+        bloom = _bloom(item, section, warnings, position)
         meta.append(
             QuestionMeta(
                 unit=0,
                 question=len(questions),
                 section_id=section_id(item.get("lo_id")),
                 bloom_level=bloom,
-                keywords=[],
-                source=_sources(item.get("citovane_zdroje", []), file_names),
+                keywords=[str(k) for k in item.get("keywords") or [] if str(k).strip()],
+                source=_sources(item.get("source", []), file_names),
                 topic=topics.get(item.get("lo_id")),
             )
         )
@@ -147,22 +123,14 @@ def build_output(pipeline_result: PipelineResult, record: JobRecord, *, timings:
 
 
 def _question(item: dict, section: Optional[dict]) -> tuple[Optional[Question], str]:
-    question_type = LEGACY_TYPES.get(str(item.get("typ", "")), "open")
-    handle, explain = DEFAULT_TIMES[question_type]
-    name_source = (section or {}).get("vzdelavaci_objekt") or str(item.get("otazka", ""))
-    hint_text = str(item.get("napoveda", "") or "").strip()
-    hints = []
-    if hint_text:
-        hints.append({"name": HINT_NAME, "url": clean_hint_html(f"<p>{html.escape(hint_text, quote=False)}</p>")})
-    data = {
-        "name": cut_at_word(str(name_source), QUESTION_NAME_MAX),
-        "description": str(item.get("otazka", "") or "").strip(),
-        "type": question_type,
-        "time_to_handle": handle,
-        "time_to_explain": explain,
-        "hints": hints,
-        "choices": [{"text": str(item.get("odpoved", "") or "").strip(), "is_correct": True}],
-    }
+    data = contract_part(item)
+    name_source = data.get("name") or (section or {}).get("vzdelavaci_objekt") or str(data.get("description") or "")
+    data["name"] = cut_at_word(str(name_source), QUESTION_NAME_MAX)
+    data["hints"] = [
+        {"name": str(h.get("name", "")), "url": clean_hint_html(str(h.get("url", "")))}
+        for h in data.get("hints") or []
+        if isinstance(h, dict)
+    ]
     try:
         return Question.model_validate(data), ""
     except ValidationError as exc:
@@ -170,7 +138,10 @@ def _question(item: dict, section: Optional[dict]) -> tuple[Optional[Question], 
         return None, "field_too_long" if too_long else "invalid_question"
 
 
-def _bloom(section: Optional[dict], warnings: list[ReportWarning], position: int) -> str:
+def _bloom(item: dict, section: Optional[dict], warnings: list[ReportWarning], position: int) -> str:
+    """Bloom level of the question (already a code from the pipeline); else of its section."""
+    if item.get("bloom_level") in BLOOM_LEVELS.values():
+        return item["bloom_level"]
     value = str((section or {}).get("bloom_level", "") or "").strip()
     bloom = BLOOM_LEVELS.get(value.casefold())
     if bloom is None:

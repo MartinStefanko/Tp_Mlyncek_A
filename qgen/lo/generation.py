@@ -40,10 +40,10 @@ def generate_learning_objects(
         prompt = build_lo_generation_prompt(combined_text, document_language)
 
         # Step 6: invalid JSON no longer skips the batch (`except Exception: continue`);
-        # generate_json repeats the call once and then raises LLMError. expect_list: an object
-        # instead of an array (e.g. {"items": [...]}) is invalid JSON too, never an empty batch.
+        # generate_json repeats the call once and then raises LLMError. items_key: the answer
+        # must be {"items": [...]}; any other shape is invalid JSON too, never an empty batch.
         parsed_seg = generate_json(
-            llm, prompt, role="lo", model=model, verbose=verbose, settings=settings, expect_list=True
+            llm, prompt, role="lo", model=model, verbose=verbose, settings=settings, items_key="items"
         )
 
         if not parsed_seg:
@@ -93,7 +93,7 @@ def generate_learning_objects(
             # Step 6: a failed call no longer means "no sources filled" (parsed_missing = []);
             # LLMError propagates.
             parsed_missing = generate_json(
-                llm, prompt_missing, role="lo", model=model, verbose=verbose, settings=settings, expect_list=True
+                llm, prompt_missing, role="lo", model=model, verbose=verbose, settings=settings, items_key="items"
             )
 
             src_map = {}
@@ -155,7 +155,7 @@ Extract ALL separately teachable parts of the material in this batch (definition
 procedures, examples, relationships), not a representative selection. Each such part is a
 separate learning objective.
 
-Return ONLY valid JSON: an array of objects with the following fields:
+Return ONLY a valid JSON object {{"items": [...]}} where "items" is an array of objects with the following fields:
 id (unique identifier 1, 2, 3...),
 vzdelávací_objekt (main point/objective, at most two words; keep the field name exactly as written),
 bloom_level (must be one of these exact Slovak values: Zapamätať si, Pochopiť, Aplikovať, Analyzovať, Hodnotiť, Vytvoriť),
@@ -177,7 +177,7 @@ Si učiteľ. Na základe nasledujúceho materiálu extrahuj merateľné vzdeláv
 Z materiálu vytiahni VŠETKY samostatne vyučiteľné časti učiva (definície, vzorce, postupy,
 príklady, súvislosti), nie reprezentatívny výber. Každá takáto časť je samostatný vzdelávací objekt.
 
-Output only valid JSON: an array of objects with the following fields:
+Output only a valid JSON object {{"items": [...]}} where "items" is an array of objects with the following fields:
 id (jedinečný identifikátor 1, 2, 3...),
 vzdelávací_objekt (hlavný bod/cieľ, najviac dve slová),
 bloom_level (jedno z: Zapamätať si, Pochopiť, Aplikovať, Analyzovať, Hodnotiť, Vytvoriť),
@@ -206,10 +206,10 @@ Input learning objectives:
 Material text:
 \"\"\"{batch_text_with_pages}\"\"\"
 
-Return ONLY valid JSON as an array of objects:
-[
+Return ONLY a valid JSON object {{"items": [...]}} where "items" is an array of objects:
+{{"items": [
     {{"id": 1, "citovane_zdroje": ["D1:12", "D2:13"]}}
-]
+]}}
 """
     return f"""
                 Si ucitel. Doplň pole citovane_zdroje pre nasledujuce LO, kde je prazdne. 
@@ -222,8 +222,8 @@ Return ONLY valid JSON as an array of objects:
                 Text materialu:
                 \"\"\"{batch_text_with_pages}\"\"\"
 
-                Vrat LEN validny JSON ako pole objektov:
-                [
+                Vrat LEN validny JSON objekt {{"items": [...]}}, kde "items" je pole objektov:
+                {{"items": [
                     {{"id": 1, "citovane_zdroje": ["D1:12", "D2:13"]}}
-                ]
+                ]}}
                 """

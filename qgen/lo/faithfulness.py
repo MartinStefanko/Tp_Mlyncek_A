@@ -117,10 +117,10 @@ Score 1-5:
 Records:
 {joined}
 
-Return ONLY valid JSON as an array of objects:
-[
+Return ONLY a valid JSON object {{"items": [...]}} where "items" is an array of objects:
+{{"items": [
   {{"lo_id": 1, "skore": 1, "zdovodnenie": "short justification in English"}}
-]
+]}}
 """
     else:
         prompt = f"""
@@ -133,20 +133,17 @@ Skore 1-5:
 Zaznamy:
 {joined}
 
-Vrat LEN validny JSON ako pole objektov:
-[
+Vrat LEN validny JSON objekt {{"items": [...]}}, kde "items" je pole objektov:
+{{"items": [
   {{"lo_id": 1, "skore": 1, "zdovodnenie": "kratke zdovodnenie"}}
-]
+]}}
 """
 
     # Step 6: no `except Exception: return None` (the LO then lost their score and were
     # filtered out); LLMError propagates.
-    parsed = generate_json(llm, prompt, role="check", model=model, verbose=verbose, settings=settings)
-
-    if isinstance(parsed, dict):
-        parsed = [parsed]
-    if not isinstance(parsed, list):
-        return {}
+    parsed = generate_json(
+        llm, prompt, role="check", model=model, verbose=verbose, settings=settings, items_key="items"
+    )
 
     evaluations = {}
     for row in parsed:

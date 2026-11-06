@@ -55,8 +55,13 @@ def test_defaults(clean_env):
     assert s.question_min_answerability_score == 3
     assert s.question_faithful_score == 4
     assert s.question_answerable_score == 4
+    # Question generation (step 13)
+    assert (s.question_extra_rounds, s.question_dedup_threshold, s.question_choice_min_share) == (1, 0.95, 0.6)
+    assert s.practical_bloom_levels == ("apply", "analyze", "evaluate", "create")
+    assert s.no_answer_bloom_levels == ("evaluate", "create")
+    assert (s.llm_temperature, s.llm_max_output_tokens) == (0.2, 32768)
     # Batches, attempts, text limits
-    assert (s.lo_batch_size, s.question_batch_size, s.question_eval_batch_size) == (10, 10, 20)
+    assert (s.lo_batch_size, s.question_generation_batch_size, s.question_eval_batch_size) == (10, 3, 20)
     assert (s.question_generation_attempts, s.question_eval_attempts, s.check_batch_attempts) == (3, 2, 2)
     assert (s.context_max_chars, s.language_sample_max_chars, s.topic_source_max_chars) == (8000, 12000, 20000)
     # Príloha D
@@ -83,7 +88,10 @@ def test_env_example_matches_the_code_defaults(clean_env):
     from_example = Settings(_env_file=REPO_ROOT / ".env.example")
     defaults = Settings(_env_file=None)
     for name in ("llm_model", "llm_model_lo", "llm_model_questions", "llm_model_eval", "embed_model",
-                 "lo_batch_size", "question_batch_size", "question_eval_batch_size"):
+                 "lo_batch_size", "question_generation_batch_size", "question_eval_batch_size",
+                 "question_extra_rounds", "question_dedup_threshold", "question_choice_min_share",
+                 "question_practical_bloom", "question_no_answer_bloom", "llm_temperature",
+                 "llm_max_output_tokens"):
         assert getattr(from_example, name) == getattr(defaults, name), name
 
 
@@ -104,8 +112,9 @@ def test_replay_settings_keep_the_baseline_models(clean_env):
     assert s.llm_model_questions == models["item_generation"]
     assert s.llm_model_eval == models["item_evaluation"]
     assert s.lo_batch_size == models["lo_batch_size"]
-    assert s.question_batch_size == models["item_batch_size"]
     assert s.question_eval_batch_size == models["item_evaluation_batch_size"]
+    if s.question_generation_batch_size != models["item_batch_size"]:
+        pytest.skip("čaká na baseline_v4 (step 13: 3 sections per generation call, baseline_v3 used 10)")
 
 
 def test_values_from_environment(clean_env):

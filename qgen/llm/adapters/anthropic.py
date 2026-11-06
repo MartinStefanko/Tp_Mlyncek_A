@@ -10,9 +10,13 @@ generate sends:
     system      JSON_SYSTEM_INSTRUCTION when json_mode=True. The Messages API has no JSON
                 mode like OpenAI's response_format; the answer is still parsed by
                 safe_load_json, with one repeated call in qgen.llm.retry.
-    temperature NOT sent: the installed SDK (anthropic 2.x) has no temperature parameter
-                in messages.create.
+    temperature NEVER sent (decision of step 13): newer Claude models may reject sampling
+                parameters, and the installed SDK (anthropic 2.4) has no temperature
+                parameter in messages.create anyway. QGEN_LLM_TEMPERATURE does not apply
+                here; it is also not sent through extra_body.
 The answer text is the concatenation of all text blocks; usage from response.usage.
+An answer that ended at the token limit (stop_reason "max_tokens") raises
+OutputTruncatedError (not retried).
 
 Timeout: QGEN_LLM_TIMEOUT_S (seconds) as the client timeout. The SDK's own retries are off
 (max_retries=0); qgen.llm.retry retries.
@@ -33,7 +37,7 @@ import anthropic
 
 from qgen.llm.adapters._http import status_error
 from qgen.llm.base import LLMResponse
-from qgen.llm.errors import LLMConfigError, LLMTimeoutError, ProviderError
+from qgen.llm.errors import LLMConfigError, LLMTimeoutError, OutputTruncatedError, ProviderError
 
 PROVIDER = "Anthropic"
 DEFAULT_MAX_TOKENS = 8192  # same as the default of QGEN_LLM_MAX_TOKENS
@@ -109,6 +113,7 @@ class AnthropicLLM:
         temperature: float = 0.2,
         max_tokens: Optional[int] = None,
     ) -> LLMResponse:
+        # temperature is accepted by the interface but intentionally not sent (see above).
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
@@ -123,6 +128,8 @@ class AnthropicLLM:
             if translated is error:
                 raise
             raise translated from error
+        if getattr(response, "stop_reason", None) == "max_tokens":
+            raise OutputTruncatedError(f"{PROVIDER} answer cut off (stop_reason max_tokens)")
         answered_by = getattr(response, "model", None)
         return LLMResponse(
             text=_response_text(response),

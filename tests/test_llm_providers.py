@@ -22,7 +22,7 @@ from qgen.llm.adapters.anthropic import AnthropicLLM
 from qgen.llm.adapters.gemini import GeminiEmbedder, GeminiLLM
 from qgen.llm.adapters.openai_compatible import OpenAICompatEmbedder, OpenAICompatLLM
 from qgen.llm.base import EmbeddingClient, LLMClient, LLMResponse
-from qgen.llm.errors import LLMConfigError, LLMError, LLMTimeoutError, ProviderError, RateLimitError
+from qgen.llm.errors import LLMConfigError, LLMError, LLMTimeoutError, OutputTruncatedError, ProviderError, RateLimitError
 from tests.fakes import FakeLLM
 
 REPO = Path(__file__).resolve().parent.parent
@@ -112,6 +112,7 @@ def test_openai_generate_request():
         "model": "qwen-27b",
         "messages": [{"role": "user", "content": "prompt text"}],
         "temperature": 0.2,
+        "response_format": {"type": "json_object"},
     }
     assert response == LLMResponse("[1]", "served-model", {"input_tokens": 11, "output_tokens": 3, "total_tokens": 14})
 
@@ -122,24 +123,23 @@ def test_openai_sends_max_tokens_and_temperature_when_given():
     assert server.body["temperature"] == 0.7 and server.body["max_tokens"] == 500
 
 
-def test_openai_json_mode_is_not_sent_yet():
-    """Decision of step 7: json_object allows only an object, the prompts ask for arrays."""
-    assert openai_adapter.JSON_MODE_ENABLED is False
-    server = MockServer(CHAT_OK, CHAT_OK)
-    llm = OpenAICompatLLM(client=_openai_sdk(server))
-    llm.generate("p", model="m", json_mode=True)
-    llm.generate("p", model="m", json_mode=False)
-    assert all("response_format" not in json.loads(r.content) for r in server.requests)
-
-
-def test_openai_json_mode_maps_to_response_format_when_enabled(monkeypatch):
-    monkeypatch.setattr(openai_adapter, "JSON_MODE_ENABLED", True)
+def test_openai_json_mode_maps_to_response_format():
+    """Step 13: every prompt asks for a JSON object, so json_object mode is on."""
     server = MockServer(CHAT_OK, CHAT_OK)
     llm = OpenAICompatLLM(client=_openai_sdk(server))
     llm.generate("p", model="m", json_mode=True)
     assert server.body["response_format"] == {"type": "json_object"}
     llm.generate("p", model="m", json_mode=False)
     assert "response_format" not in server.body
+
+
+def test_openai_finish_reason_length_is_truncated():
+    cut = httpx2.Response(200, json={
+        "id": "c", "object": "chat.completion", "created": 1, "model": "m",
+        "choices": [{"index": 0, "finish_reason": "length", "message": {"role": "assistant", "content": '{"items": ['}}],
+    })
+    with pytest.raises(OutputTruncatedError):
+        OpenAICompatLLM(client=_openai_sdk(MockServer(cut))).generate("p", model="m")
 
 
 def test_openai_empty_answer_is_empty_text():
@@ -236,7 +236,8 @@ def test_anthropic_generate_request():
         "messages": [{"role": "user", "content": "prompt text"}],
         "system": anthropic_adapter.JSON_SYSTEM_INSTRUCTION,
     }
-    assert "temperature" not in server.body  # not a parameter of the installed SDK
+    # temperature is never sent (decision of step 13), also not through extra_body
+    assert "temperature" not in server.body
     assert response == LLMResponse("[1, 2]", "claude-test", {"input_tokens": 9, "output_tokens": 4, "total_tokens": 13})
 
 
@@ -248,6 +249,17 @@ def test_anthropic_max_tokens_and_json_mode_off():
     assert "system" not in server.body
     llm.generate("p", model="claude-test", max_tokens=100)  # the caller's value wins
     assert server.body["max_tokens"] == 100
+
+
+def test_anthropic_stop_reason_max_tokens_is_truncated():
+    cut = httpx2.Response(200, json={
+        "id": "m1", "type": "message", "role": "assistant", "model": "claude-test",
+        "content": [{"type": "text", "text": '{"items": ['}],
+        "stop_reason": "max_tokens", "stop_sequence": None,
+        "usage": {"input_tokens": 9, "output_tokens": 4},
+    })
+    with pytest.raises(OutputTruncatedError):
+        AnthropicLLM(client=_anthropic_sdk(MockServer(cut))).generate("p", model="claude-test", max_tokens=4)
 
 
 def test_anthropic_answer_without_text_is_empty():
