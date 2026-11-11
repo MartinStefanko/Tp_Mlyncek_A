@@ -97,13 +97,12 @@ def test_env_example_matches_the_code_defaults(clean_env):
 
 def test_replay_settings_keep_the_baseline_models(clean_env):
     """The replay tests do not rely on the code defaults: baseline_settings() passes the
-    models and question settings of baseline_v4/metrics.json explicitly (the code default of
-    the dedup threshold is 0.94, the recording used 0.95)."""
+    models, question settings and concurrency of baseline_v5/metrics.json explicitly."""
     from tests.baseline_data import baseline_settings
 
-    metrics_path = REPO_ROOT / "baseline_v4" / "metrics.json"
+    metrics_path = REPO_ROOT / "baseline_v5" / "metrics.json"
     if not metrics_path.is_file():
-        pytest.skip("baseline_v4/metrics.json is missing")
+        pytest.skip("baseline_v5/metrics.json is missing")
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     models, roles = metrics["models"], metrics["run"]["models_by_role"]
     s = baseline_settings()
@@ -119,7 +118,7 @@ def test_replay_settings_keep_the_baseline_models(clean_env):
     for name in ("question_generation_batch_size", "question_extra_rounds", "question_dedup_threshold",
                  "llm_temperature", "llm_max_output_tokens"):
         assert getattr(s, name) == recorded[name], name
-    assert s.question_dedup_threshold == 0.95 != Settings(_env_file=None).question_dedup_threshold == 0.94
+    assert s.llm_max_concurrency == metrics["run"]["llm_max_concurrency"]
 
 
 def test_values_from_environment(clean_env):

@@ -2,7 +2,7 @@
 QGEN_LLM_MAX_CONCURRENCY > 1.
 
 - results in the order of the batches, whatever finishes first; same pipeline result as
-  with concurrency 1 (FakeLLM with random-like delays, and replay of baseline_v4)
+  with concurrency 1 (FakeLLM with random-like delays, and replay of baseline_v5)
 - never more calls at once than the limit (all batches and steps together)
 - LLMError in one batch: no new batch starts, the running ones finish, no partial result
 - cancel (JobCancelled from the progress callback) during a parallel step
@@ -362,7 +362,7 @@ def test_progress_is_monotonic_and_only_from_the_main_thread():
     assert units[-1][0] == units[-1][1] == units[0][1]  # total stays batches * (1 + extra rounds)
 
 
-# --- replay of baseline_v4 -----------------------------------------------------------------
+# --- replay of baseline_v5 -----------------------------------------------------------------
 
 
 @pytest.mark.parametrize("limit", [1, 4])

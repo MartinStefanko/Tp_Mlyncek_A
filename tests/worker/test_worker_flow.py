@@ -135,7 +135,7 @@ def test_options_reach_the_pipeline(env, ocr):
 
 
 def test_replay_eko_completed(env_factory):
-    """eko.pdf over baseline_v4: counts must match the recording."""
+    """eko.pdf over baseline_v5: counts must match the recording."""
     require_baseline()
     # models and question settings of the recording (dedup threshold 0.95, code default 0.94)
     env = env_factory(**baseline_models(), **baseline_question_settings())

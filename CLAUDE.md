@@ -51,14 +51,16 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Cieľ generovania: čo najviac otázok, pokrytie všetkých tematických celkov.
   per_section je minimum, nie strop.
 - Replay testy (test ekvivalencie, test_cli, test_progress, replay časti workera) stoja na
-  referenčnej nahrávke baseline_v4/ (gemini-3.1-flash-lite + gemini-3.5-flash). Meraná bola
-  s kódom kroku 13 pred jeho commitom (metrics.json: git_commit 9e1eddf, git_dirty true);
-  zodpovedá jej commit c9cb618. Očakávané hodnoty, modely aj nastavenia otázok
-  (metrics.json "questions" → "settings", napr. prah duplicít 0.95) berie tests/baseline_data.py
-  iba z jej súborov, nie z predvolených hodnôt kódu. V gite je len metrics.json, bez lokálnej
+  referenčnej nahrávke baseline_v5/ (gemini-3.1-flash-lite + gemini-3.5-flash). Meraná bola
+  s commitom dff7c00 (metrics.json: git_dirty false; nápovedy z kódu, opravený filter otázok).
+  Očakávané hodnoty, modely, nastavenia otázok (metrics.json "questions" → "settings", prah
+  duplicít 0.94) aj súbežnosť (run.llm_max_concurrency 8) berie tests/baseline_data.py
+  iba z jej súborov, nie z predvolených hodnôt kódu. docker-compose.replay.yml
+  a tools/resilience_check.py používajú tiež baseline_v5. V gite je len metrics.json, bez lokálnej
   nahrávky sa testy preskočia. Zmena promptu = nová nahrávka (tools/baseline.py), nie úprava testov.
-- baseline/ (gemini-2.5) a baseline_v3/ (starý formát otázok) sú iba historické záznamy;
-  žiadny test ich nepoužíva. Všetky tri sú chránené v tools/baseline.py.
+- baseline/ (gemini-2.5), baseline_v3/ (starý formát otázok) a baseline_v4/ (krok 13, prompty
+  s nápovedami) sú iba historické záznamy; žiadny test ich nepoužíva. Všetky štyri sú chránené
+  v tools/baseline.py.
 
 ## Požiadavky na ďalšie kroky (z kroku 8)
 - Krok 9: `delete_job` (DELETE hotovej úlohy aj mazanie po TTL) musí odstrániť aj rezerváciu
@@ -84,7 +86,7 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Anthropic: temperature sa neposiela vôbec (ani extra_body).
 - Doplňujúce kolá: QGEN_QUESTION_EXTRA_ROUNDS=1.
 - Prah duplicít QGEN_QUESTION_DEDUP_THRESHOLD=0.94 (baseline_v4 nahratá s 0.95; dvojice
-  0.947–0.949 boli tiež preformulované otázky). Replay testy používajú 0.95 z nahrávky.
+  0.947–0.949 boli tiež preformulované otázky). baseline_v5 je nahratá s 0.94.
 
 ## Požiadavky na ďalšie kroky (z kroku 13)
 - Krok 14: poradie v hodine choice → open → no_answer, dĺžkové limity a skracovanie.
@@ -97,7 +99,7 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   Task iba volá LLM; stav pipeline, id a progress_callback mení len hlavné vlákno v poradí batchov.
 - Otázky: kolá generovania idú po fázach cez všetky batche; `renumber_generation` vráti id a poradie
   sekvenčného behu (batch po batchi). Hraničný prípad: otázka s lo_id celku z iného batchu by
-  v dedup/zozname existujúcich otázok mohla mať iné poradie – v baseline_v4 sa nevyskytuje.
+  v dedup/zozname existujúcich otázok mohla mať iné poradie – v baseline_v4 ani v5 sa nevyskytuje.
 
 ## Požiadavky na ďalšie kroky (z kroku 13b)
 - HOTOVÉ v kroku 13c: nápoveda obsahuje iba odkaz na názov dokumentu a strany, vytvára ju kód
@@ -121,9 +123,6 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   strán dokumentu s najviac behmi („, …“), potom celé dokumenty („; …“), nakoniec znaky.
 - options.questions.hints: 0 = bez nápovedy, ≥ 1 = jedna nápoveda so zdrojom (rozsah 0–2 a
   predvolené 2 ostali kvôli kontraktu). legacy_output ju len pustí cez nh3. Report bez zmeny.
-- Replay testy nad baseline_v4 sú preskočené (`tests/baseline_data.AWAITING_BASELINE`,
-  „čaká na baseline_v5“). Po nahratí v5: BASELINE_DIR → baseline_v5, AWAITING_BASELINE = None,
-  aktualizovať tento dokument (referenčná nahrávka).
 
 ## Oprava filtra otázok (po kroku 13c)
 - `filter_items_variant_b`: každý prah platí samostatne – skóre kvality < QGEN_QUESTION_MIN_SCORE,
@@ -132,9 +131,4 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   Predtým bolo kvalita OR zodpovedateľnosť (variant B z pôvodného kódu), takže prechádzali otázky
   so skóre 2 (napr. nesprávna vzorová odpoveď) aj so zodpovedateľnosťou 1. Celok pod per_section
   po filtri dostane doplnenie pokrytia ako doteraz. Filter tematických celkov (iba vernosť) bol v poriadku.
-- baseline_v5 nameraná pred touto opravou → treba ju nahrať znova (pôvodný priečinok sa prepíše).
-
-## Otvorené body (z kroku 13c)
-- Nahrať baseline_v5 (zmena promptov) a prepnúť na ňu replay testy.
-- docker-compose.replay.yml a tools/resilience_check.py stále používajú baseline_v4
-  (prompty už nesedia) – prepnúť na v5 po jej nahratí.
+- baseline_v5 je nahratá až s touto opravou (commit dff7c00).

@@ -1,7 +1,7 @@
 """Resilience check of the real service in Docker (kap. 9: Test odolnosti, Test 202, Test mazania).
 
 Starts docker-compose.dev.yml + docker-compose.replay.yml (LLM and embeddings from the
-recording baseline_v4/, no API key, no cost), receives the webhooks in this process
+recording baseline_v5/, no API key, no cost), receives the webhooks in this process
 (tools/webhook_receiver.py, signature checked) and goes through the scenarios over the
 HTTP API and `docker compose`:
 
@@ -22,7 +22,7 @@ Manual only (not part of pytest); takes about 15 minutes.
     venv/Scripts/python.exe tools/resilience_check.py
     venv/Scripts/python.exe tools/resilience_check.py --only b,d --keep-up
 
-Needs Docker, baseline_v4/llm_calls.jsonl and eko.pdf (tests/fixtures/ or
+Needs Docker, baseline_v5/llm_calls.jsonl and eko.pdf (tests/fixtures/ or
 Hlavna_cast/ucebny_material/). Free ports: 8000 (API), 9000 (receiver).
 Times that cannot be waited for here (24 h input TTL, 7 day result TTL) are covered by
 tests/worker/test_retention.py and tests/jobs/test_cleanup.py with a moved clock.
@@ -52,7 +52,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 from webhook_receiver import make_server  # noqa: E402
 
 COMPOSE_FILES = ("docker-compose.dev.yml", "docker-compose.replay.yml")
-RECORDING = REPO_ROOT / "baseline_v4" / "llm_calls.jsonl"
+RECORDING = REPO_ROOT / "baseline_v5" / "llm_calls.jsonl"
 PDF_CANDIDATES = (
     REPO_ROOT / "tests" / "fixtures" / "eko.pdf",
     REPO_ROOT / "Hlavna_cast" / "ucebny_material" / "eko.pdf",
@@ -499,7 +499,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if unknown:
         parser.error(f"unknown scenarios: {', '.join(unknown)}")
     if not RECORDING.is_file():
-        print(f"Missing recording {RECORDING} (tools/baseline.py --out baseline_v4 --force).", file=sys.stderr)
+        print(f"Missing recording {RECORDING} (tools/baseline.py --out baseline_v5 --force).", file=sys.stderr)
         return 2
     pdf = next((p for p in PDF_CANDIDATES if p.is_file()), None)
     if pdf is None:

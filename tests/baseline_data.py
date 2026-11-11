@@ -1,8 +1,8 @@
-"""Shared access to the reference recording baseline_v4/ for replay tests.
+"""Shared access to the reference recording baseline_v5/ for replay tests.
 
-baseline_v4/ is the recording of tools/baseline.py on eko.pdf with gemini-3.1-flash-lite
-and gemini-3.5-flash (eval), made with the code of step 13 before its commit (metrics.json
-"run" says git_commit 9e1eddf, git_dirty true; the code is commit c9cb618). The replay
+baseline_v5/ is the recording of tools/baseline.py on eko.pdf with gemini-3.1-flash-lite
+and gemini-3.5-flash (eval), made with commit dff7c00 (metrics.json "run": git_dirty
+false; hints built by code, question filter with each threshold on its own). The replay
 tests run the pipeline with the replay client on its segments.json and compare the result
 with its outputs; the expected values come only from these files.
 
@@ -10,12 +10,8 @@ Only metrics.json is in git; the recording (llm_calls.jsonl, segments.json, outp
 document text and stays local. Tests that need it call `require_baseline()`, which skips
 the test when a file is missing.
 
-The former baseline/ (gemini-2.5) and baseline_v3/ (old question format, before step 13)
-are historical records only; no test uses them.
-
-Step 13c changed the prompts (no hints), so the prompts of baseline_v4 no longer match:
-every replay test is skipped ("čaká na baseline_v5") until the new recording baseline_v5
-exists. Then point BASELINE_DIR to it and set AWAITING_BASELINE = None.
+The former baseline/ (gemini-2.5), baseline_v3/ (old question format, before step 13) and
+baseline_v4/ (step 13, prompts with hints) are historical records only; no test uses them.
 """
 
 import json
@@ -26,7 +22,7 @@ import pytest
 from qgen.config import Settings
 from qgen.llm.adapters.replay import ReplayClient
 
-BASELINE_DIR = Path(__file__).resolve().parent.parent / "baseline_v4"
+BASELINE_DIR = Path(__file__).resolve().parent.parent / "baseline_v5"
 BASELINE_NAME = BASELINE_DIR.name
 REQUIRED_FILES = (
     "llm_calls.jsonl",
@@ -40,7 +36,7 @@ REQUIRED_FILES = (
 
 
 # Reason why the replay tests are skipped; None = run them on BASELINE_DIR.
-AWAITING_BASELINE = "čaká na baseline_v5"
+AWAITING_BASELINE = None
 
 
 def require_baseline() -> None:
@@ -57,7 +53,7 @@ def load_json(name):
 
 
 def replay_client() -> ReplayClient:
-    """Replays baseline_v4/llm_calls.jsonl as recorded (no transforms: same prompts)."""
+    """Replays baseline_v5/llm_calls.jsonl as recorded (no transforms: same prompts)."""
     return ReplayClient(BASELINE_DIR / "llm_calls.jsonl")
 
 
@@ -92,13 +88,21 @@ QUESTION_SETTING_FIELDS = (
 
 
 def baseline_question_settings() -> dict:
-    """The question settings of the recorded run (e.g. dedup threshold 0.95, while the
-    code default is 0.94), so the replay does not depend on the code defaults."""
+    """The question settings of the recorded run, so the replay does not depend on the
+    code defaults (e.g. a later change of the dedup threshold)."""
     recorded = load_metrics()["questions"]["settings"]
     return {name: recorded[name] for name in QUESTION_SETTING_FIELDS}
 
 
+def baseline_concurrency() -> dict:
+    """llm_max_concurrency of the recorded run (metrics.json "run"). The results do not
+    depend on it (ids and order follow the sequential run), it is taken over so the replay
+    runs like the recording."""
+    return {"llm_max_concurrency": load_metrics()["run"]["llm_max_concurrency"]}
+
+
 def baseline_settings() -> Settings:
-    """Code defaults plus the recorded models and question settings; a local .env or
-    QGEN_* variables must not change a replay run."""
-    return Settings.model_construct(**baseline_models(), **baseline_question_settings())
+    """Code defaults plus the recorded models, question settings and concurrency; a local
+    .env or QGEN_* variables must not change a replay run."""
+    return Settings.model_construct(**baseline_models(), **baseline_question_settings(),
+                                    **baseline_concurrency())

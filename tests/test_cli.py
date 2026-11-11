@@ -45,7 +45,7 @@ def _read_json(path):
 
 @pytest.fixture
 def baseline_segments_extraction(monkeypatch):
-    """Replace PDF extraction by baseline_v4/segments.json (the recording starts after extraction)."""
+    """Replace PDF extraction by baseline_v5/segments.json (the recording starts after extraction)."""
     calls = []
 
     def fake_pdfs_to_text(pdf_inputs, ocr=None, progress_callback=None, settings=None):
@@ -88,7 +88,7 @@ def test_cli_writes_results_and_reports(tmp_path, capsys, baseline_segments_extr
 
 
 def test_cli_passes_ocr_and_language(tmp_path, monkeypatch, baseline_segments_extraction):
-    require_baseline()  # the fake extraction reads baseline_v4/segments.json
+    require_baseline()  # the fake extraction reads baseline_v5/segments.json
     captured = {}
 
     def fake_run_pipeline(segments, **kwargs):

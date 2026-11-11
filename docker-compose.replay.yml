@@ -1,5 +1,5 @@
 # Development only: the real service answers LLM / embedding calls from the recording
-# baseline_v4/llm_calls.jsonl (eko.pdf) instead of an API. No key, no cost, same result.
+# baseline_v5/llm_calls.jsonl (eko.pdf) instead of an API. No key, no cost, same result.
 #   docker compose -f docker-compose.dev.yml -f docker-compose.replay.yml up --build
 # Used by tools/resilience_check.py (README, "Overenie odolnosti"). The worker logs a loud
 # REPLAY warning at start and /v1/info shows "replay": true. NEVER in production.
@@ -25,13 +25,15 @@ x-replay-env: &replay-env
   QGEN_LLM_MODEL_EVAL: gemini-3.5-flash
   QGEN_EMBED_MODEL: gemini-embedding-001
   QGEN_OCR_ENABLED: "false"
-  # Question settings of baseline_v4 (metrics.json "questions" -> "settings"); the code
-  # default of the dedup threshold is 0.94, the recording was made with 0.95.
+  # Question settings and concurrency of baseline_v5 (metrics.json "questions" -> "settings",
+  # "run" -> "llm_max_concurrency"), fixed here so a later change of a code default or .env
+  # does not break the replay.
   QGEN_QUESTION_GENERATION_BATCH_SIZE: "3"
   QGEN_QUESTION_EXTRA_ROUNDS: "1"
-  QGEN_QUESTION_DEDUP_THRESHOLD: "0.95"
+  QGEN_QUESTION_DEDUP_THRESHOLD: "0.94"
   QGEN_LLM_TEMPERATURE: "0.2"
   QGEN_LLM_MAX_OUTPUT_TOKENS: "32768"
+  QGEN_LLM_MAX_CONCURRENCY: "8"
   # Fixed development values (not secrets) so the check knows the API key and the secret.
   QGEN_API_KEYS: ${QGEN_REPLAY_API_KEY:-replay-dev-key}
   QGEN_WEBHOOK_SECRET: ${QGEN_REPLAY_WEBHOOK_SECRET:-replay-dev-secret}
@@ -40,7 +42,7 @@ x-replay-env: &replay-env
 
 x-replay-volumes: &replay-volumes
   - qgen-data:/data
-  - ./baseline_v4:/replay:ro
+  - ./baseline_v5:/replay:ro
 
 services:
   api:

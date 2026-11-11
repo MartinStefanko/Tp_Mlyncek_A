@@ -1,6 +1,6 @@
-"""Replay of the reference recording baseline_v4/: the pipeline must give the same results.
+"""Replay of the reference recording baseline_v5/: the pipeline must give the same results.
 
-Runs the LO pipeline and the question pipeline on baseline_v4/segments.json (no PDF, no
+Runs the LO pipeline and the question pipeline on baseline_v5/segments.json (no PDF, no
 OCR) with the replay client, with the same arguments as tools/baseline.py, and compares the
 results with the recorded outputs. Every prompt must be byte-identical to the recording: a
 changed prompt is a call that is not in the recording (UnrecordedCallError), and every
