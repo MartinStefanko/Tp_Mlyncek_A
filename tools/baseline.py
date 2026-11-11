@@ -130,7 +130,8 @@ def git_version(repo: Path = REPO_ROOT) -> dict:
 
 
 def run_info(run_settings: Settings, models_source: str, started_at: datetime, version: dict) -> dict:
-    """Which run the metrics belong to: date, code version, providers and models per role."""
+    """Which run the metrics belong to: date, code version, providers, parallel LLM calls
+    (QGEN_LLM_MAX_CONCURRENCY, step 13b; the timings depend on it) and models per role."""
     return {
         "started_at": started_at.isoformat(timespec="seconds"),
         "git_commit": version.get("commit"),
@@ -138,6 +139,7 @@ def run_info(run_settings: Settings, models_source: str, started_at: datetime, v
         "models_source": models_source,
         "llm_provider": run_settings.llm_provider,
         "embed_provider": run_settings.embed_provider,
+        "llm_max_concurrency": run_settings.llm_max_concurrency,
         "models_by_role": models_by_role(run_settings),
     }
 

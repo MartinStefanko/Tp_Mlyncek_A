@@ -37,9 +37,15 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Testy spúšťaj cez venv/Scripts/python.exe -m pytest (globálny Python nemá závislosti).
 - LLMError musí prebublať z run_pipeline; worker ju v kroku 10 zmení na failed s error.code llm_error.
 
-- Terminológia: LO z pôvodného kódu = tematický celok (v kóde Section). Learning object = jedna
-  otázka alebo úloha vo výstupe (význam ECEH). Väčšie jednotky dokumentu pre split topics = témy (topic).
-  Interné funkcie pôvodných modulov sa zatiaľ nepremenúvajú.
+- Terminológia (podľa stránky Databáza, Viktor Bejtic): learning object (LO) v ECEH = TEMATICKÝ
+  CELOK Mlynčeka (v kóde Section) – skupina otázok s názvom, tvrdením a typom. ECEH ho ukladá do
+  tabuľky learning_objects a presúva medzi hodinami (learning_object_unit). Learning object NIE JE
+  jedna otázka; otázka/úloha je položka units[].questions[]. Väčšie jednotky dokumentu pre
+  split topics = témy (topic). Interné funkcie pôvodných modulov sa zatiaľ nepremenúvajú.
+- Report je súčasť integrácie, nie iba diagnostika: Laravel ho ukladá celý do generations.report
+  (jsonb), z report.learning_objects[] plní tabuľku learning_objects (external_id = id LO
+  z reportu), pri otázke ukladá generation_questions.lo_ref (id learning objektu) a z kľúčových
+  slov, Bloomovej úrovne a témy (anchor) robí tagy (tags + taggables, source = llm).
 
 ## Cieľ generovania a referenčná nahrávka
 - Cieľ generovania: čo najviac otázok, pokrytie všetkých tematických celkov.
@@ -82,7 +88,19 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 
 ## Požiadavky na ďalšie kroky (z kroku 13)
 - Krok 14: poradie v hodine choice → open → no_answer, dĺžkové limity a skracovanie.
+- Krok 14: report použije názvy zo stránky Databáza – `learning_objects[]` namiesto `sections`
+  a väzba otázky cez `lo_ref` namiesto `section_id`. Kontrakt a schéma reportu
+  (qgen/contract/report.py, exportované schémy) sa upravia v kroku 14; dovtedy sa kód reportu nemení.
 
-## Požiadavky na ďalšie kroky (z kroku 11)
-- Krok 13: nápovedy nesmú odkazovať na strany ani časti dokumentu („pozrite si stranu 14“) –
-  študent v ECEH PDF nemá. Nápoveda má navádzať obsahom.
+## Rozhodnutia z kroku 13b (paralelné volania)
+- Súbežné batche iba cez `qgen.llm.parallel.run_batches` (QGEN_LLM_MAX_CONCURRENCY; 1 = bez vlákien).
+  Task iba volá LLM; stav pipeline, id a progress_callback mení len hlavné vlákno v poradí batchov.
+- Otázky: kolá generovania idú po fázach cez všetky batche; `renumber_generation` vráti id a poradie
+  sekvenčného behu (batch po batchi). Hraničný prípad: otázka s lo_id celku z iného batchu by
+  v dedup/zozname existujúcich otázok mohla mať iné poradie – v baseline_v4 sa nevyskytuje.
+
+## Požiadavky na ďalšie kroky (z kroku 13b)
+- Krok 13c: nápoveda bude obsahovať iba odkaz na názov dokumentu a číslo strany (napr.
+  „Pozri: eko.pdf, strana 14“). Vytvorí ju kód zo zdrojov otázky (source pages), nie LLM;
+  prompty prestanú nápovedy pýtať. Je to požiadavka tímu; ruší pôvodné pravidlo, že nápovedy
+  nesmú odkazovať na strany. V kroku 13b sa nápovedy ani prompty nemenia.

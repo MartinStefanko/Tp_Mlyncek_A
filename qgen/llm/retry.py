@@ -15,8 +15,10 @@ The timeout of one call (QGEN_LLM_TIMEOUT_S) is set in the client by the adapter
 raises LLMTimeoutError; here it is one more failed attempt. No thread runs a call in the
 background, so two attempts of the same call never run at the same time.
 
-All calls go through one semaphore sized by QGEN_LLM_MAX_CONCURRENCY (Príloha B). The
-pipeline calls the LLM one after another today, so it changes nothing yet.
+All calls go through one semaphore sized by QGEN_LLM_MAX_CONCURRENCY (Príloha B), shared by
+the whole process: it limits the sum of the calls of all batches that run at the same time
+(qgen.llm.parallel, krok 13b), LLM and embedding calls together. Only the call itself holds
+it; the wait between attempts does not.
 
 On final failure the functions raise LLMError. The pipeline must not catch it.
 `llm` / `embedder` = None: the client comes from qgen.llm.factory for the role.

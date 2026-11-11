@@ -112,6 +112,7 @@ def test_metrics_contain_the_run_info(baseline, tmp_path):
         "models_source": "settings",
         "llm_provider": "gemini",
         "embed_provider": "gemini",
+        "llm_max_concurrency": 4,
         "models_by_role": {"lo": "base", "prereq": "base", "questions": "base", "eval": "ev",
                            "check": "base", "topics": "base", "split": "base", "embed": "emb"},
     }

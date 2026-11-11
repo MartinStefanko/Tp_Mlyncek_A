@@ -15,6 +15,14 @@ content of each section (tematický celok) allows.
        call; the new questions go through 2-3 as well
     5. relevance to the section (all questions), ordering, ids 1..n
 
+Step 13b: the calls of one step run at the same time (QGEN_LLM_MAX_CONCURRENCY,
+qgen.llm.parallel): the first calls of all batches, then each extra round for all batches
+(a round starts when every batch of the previous one has finished), the quality score
+chunks, the faithfulness / answerability batches and the coverage calls. The answers are
+processed in the main thread in the order of the batches; after the generation step the
+questions get the ids of the former run (batch by batch, round by round), so the result
+does not depend on the order in which the calls finish.
+
 per_section (options.questions.per_section) is a minimum, never a target or a limit.
 Nothing is written to disk. LLMError propagates (also when a single section does not fit
 into the output token limit).
@@ -41,6 +49,7 @@ from qgen.context_builder import (
 from qgen.extraction.document_language import resolve_document_language
 from qgen.llm.base import EmbeddingClient, LLMClient
 from qgen.llm.errors import LLMError
+from qgen.llm.parallel import run_batches
 from qgen.llm.retry import generate_json
 from qgen.progress import STAGE_Q_EVALUATION, STAGE_QUESTIONS, ProgressCallback, batch_count, report_progress
 from qgen.questions.answerability import analyze_item_answerability
@@ -371,11 +380,16 @@ class _QuestionRun:
         self.wrong_marking: list[dict] = []
         self.generation_seconds = 0.0
         self.evaluation_seconds = 0.0
+        # Generation step only: (batch, round) of every question and of every duplicate
+        # count, to restore the order of the former batch-by-batch run (renumber_generation).
+        self.position: dict[int, tuple[int, int]] = {}
+        self.duplicate_events: list[tuple[tuple[int, int], str, int]] = []
 
     # --- generation ---------------------------------------------------------------------
 
-    def generate(self, sections, origin, existing=None, missing=None) -> BatchItems:
-        result = generate_with_split(
+    def call_generation(self, sections, existing=None, missing=None) -> BatchItems:
+        """One generation call (split when cut off). Changes no state: runs in a worker thread."""
+        return generate_with_split(
             sections,
             self.page_map,
             verbose=self.verbose,
@@ -388,15 +402,19 @@ class _QuestionRun:
             existing=existing,
             missing=missing,
         )
+
+    def record_generation(self, result: BatchItems, origin: str) -> None:
+        """Counters of one generation answer (main thread, in the order of the batches)."""
         self.generation_dropped.update(result.dropped)
         self.no_content.update(result.no_content)
         self.splits += result.splits
         self.calls[origin.split("_")[0]] += result.calls
-        return result
 
-    def accept_new(self, result: BatchItems, origin: str) -> tuple[Counter, list[dict]]:
-        """Normalize, validate and deduplicate the items of one answer.
+    def accept_new(self, result: BatchItems, origin: str,
+                   position: Optional[tuple[int, int]] = None) -> tuple[Counter, list[dict]]:
+        """Normalize, validate and deduplicate the items of one answer (main thread).
 
+        position: (batch, round) in the generation step (see renumber_generation).
         Returns (new questions per section, new questions); they wait for the evaluation."""
         records = []
         for raw in result.items:
@@ -404,6 +422,8 @@ class _QuestionRun:
             item, notes = normalize_generated_item(raw, section, self.qs, self.language)
             item = {"id": self.next_id, **item, "origin": origin, "evaluation": {"score": None, "reason": ""}}
             item["source_files"] = resolve_source_names(item["source"], self.source_name_map)
+            if position is not None:
+                self.position[item["id"]] = position
             self.next_id += 1
             self.times_clamped += int(notes["times_clamped"])
             records.append(item)
@@ -427,6 +447,8 @@ class _QuestionRun:
         for item in duplicates:
             self.status[item["id"]] = DROP_DUPLICATE
             self.duplicates_by_origin[origin] += 1
+        if position is not None:
+            self.duplicate_events.append((position, origin, len(duplicates)))
         for item in new:
             self.status[item["id"]] = STATUS_PENDING
         return Counter(item["lo_id"] for item in new), new
@@ -440,7 +462,10 @@ class _QuestionRun:
         return existing
 
     def run_generation(self) -> list[dict]:
-        """Step 2 for all batches; returns the questions waiting for the evaluation."""
+        """Step 2 for all batches; returns the questions waiting for the evaluation.
+
+        Round 0 = the first calls of all batches, then the extra rounds; the calls of one
+        round run at the same time, the next round starts when the round has finished."""
         started = time.perf_counter()
         batches = _chunks(self.los, self.batch_size)
         per_batch = 1 + self.extra_rounds
@@ -450,43 +475,86 @@ class _QuestionRun:
         pending: list[dict] = []
         round_stats: dict[int, Counter] = {r: Counter() for r in range(1, self.extra_rounds + 1)}
 
-        for number, batch in enumerate(batches):
-            base = number * per_batch
-            if self.verbose:
-                print(f"\nBatch {number + 1}: LO id {[lo.get('id') for lo in batch]}")
-            new_counts, new = Counter(), []
+        def first_call(number, batch):
+            results = []
             for attempt in range(1, self.max_batch_attempts + 1):
-                result = self.generate(batch, ORIGIN_INITIAL)
+                result = self.call_generation(batch)
+                results.append(result)
                 if result.items:
-                    new_counts, new = self.accept_new(result, ORIGIN_INITIAL)
                     break
                 if self.verbose and self.max_batch_attempts > 1:
                     print(f"Batch {number + 1}: prazdny vystup, opakujem ({attempt}/{self.max_batch_attempts})")
-            pending.extend(new)
-            progress.jump(base + 1)
+            return results
 
-            active = [lo for lo in batch if new_counts[lo.get("id")] > 0 and lo.get("id") not in self.no_content]
-            for round_no in range(1, self.extra_rounds + 1):
-                if not active:
-                    break
-                origin = extra_origin(round_no)
-                result = self.generate(active, origin, existing=self.existing_for(active))
-                counts, new = self.accept_new(result, origin)
+        answers = run_batches(
+            [lambda number=number, batch=batch: first_call(number, batch) for number, batch in enumerate(batches)],
+            settings=self.settings, on_done=lambda _index, _result: progress.advance(),
+        )
+        active_by_batch: dict[int, list] = {}
+        for number, (batch, results) in enumerate(zip(batches, answers)):
+            if self.verbose:
+                print(f"\nBatch {number + 1}: LO id {[lo.get('id') for lo in batch]}")
+            new_counts, new = Counter(), []
+            for result in results:
+                self.record_generation(result, ORIGIN_INITIAL)
+                if result.items:
+                    new_counts, new = self.accept_new(result, ORIGIN_INITIAL, position=(number, 0))
+            pending.extend(new)
+            active_by_batch[number] = [
+                lo for lo in batch if new_counts[lo.get("id")] > 0 and lo.get("id") not in self.no_content
+            ]
+
+        for round_no in range(1, self.extra_rounds + 1):
+            work = [(number, active) for number, active in active_by_batch.items() if active]
+            if not work:
+                break
+            if len(work) < len(batches):
+                progress.advance(len(batches) - len(work))  # batches that stopped: their unit is done
+            origin = extra_origin(round_no)
+            calls = [(active, self.existing_for(active)) for _, active in work]
+            results = run_batches(
+                [lambda active=active, existing=existing: self.call_generation(active, existing=existing)
+                 for active, existing in calls],
+                settings=self.settings, on_done=lambda _index, _result: progress.advance(),
+            )
+            for (number, active), result in zip(work, results):
+                self.record_generation(result, origin)
+                counts, new = self.accept_new(result, origin, position=(number, round_no))
                 pending.extend(new)
                 round_stats[round_no]["calls"] += result.calls
                 round_stats[round_no]["sections"] += len(active)
                 round_stats[round_no]["questions_added"] += len(new)
-                active = [lo for lo in active if counts[lo.get("id")] > 0]
-                round_stats[round_no]["sections_continuing"] += len(active)
-                progress.jump(base + 1 + round_no)
-            progress.jump(base + per_batch)
+                active_by_batch[number] = [lo for lo in active if counts[lo.get("id")] > 0]
+                round_stats[round_no]["sections_continuing"] += len(active_by_batch[number])
 
         progress.finish()
         self.rounds = [{"round": r, **{k: stats[k] for k in ("calls", "sections", "questions_added",
                                                               "sections_continuing")}}
                        for r, stats in round_stats.items()]
+        pending = self.renumber_generation(pending)
         self.generation_seconds += time.perf_counter() - started
         return pending
+
+    def renumber_generation(self, pending: list[dict]) -> list[dict]:
+        """Ids, order and duplicate counters of the former batch-by-batch run.
+
+        The rounds ran one after another over all batches (round-major); the former run
+        went batch by batch (batch 1 with its extra rounds, then batch 2, ...). The ids
+        go into the evaluation prompts, so they must be the same."""
+        order = sorted(self.items, key=lambda item: (self.position[item["id"]], item["id"]))
+        new_ids = {item["id"]: number for number, item in enumerate(order, start=1)}
+        self.status = {new_ids[item["id"]]: self.status[item["id"]] for item in order if item["id"] in self.status}
+        for item in order:
+            item["id"] = new_ids[item["id"]]
+        self.items = order
+        self.position = {}
+        duplicates: Counter = Counter()
+        for _position, origin, count in sorted(self.duplicate_events, key=lambda event: event[0]):
+            if count:
+                duplicates[origin] += count
+        self.duplicates_by_origin = duplicates
+        self.duplicate_events = []
+        return sorted(pending, key=lambda item: item["id"])
 
     # --- evaluation -----------------------------------------------------------------------
 
@@ -494,7 +562,8 @@ class _QuestionRun:
         """Quality score, faithfulness (+ choice marking), answerability and the filter.
         Sets the status of every pending question to accepted or a drop reason."""
         started = time.perf_counter()
-        for chunk in _chunks(pending, self.evaluation_batch_size):
+
+        def score_chunk(chunk):
             scores = {}
             for attempt in range(1, self.max_eval_attempts + 1):
                 scores = evaluate_items_batch(chunk, model=self.evaluation_model, llm=self.llm, verbose=self.verbose,
@@ -503,10 +572,17 @@ class _QuestionRun:
                     break
                 if self.verbose and self.max_eval_attempts > 1:
                     print(f"Hodnotenie prazdne, opakujem ({attempt}/{self.max_eval_attempts})")
+            return scores
+
+        chunks = _chunks(pending, self.evaluation_batch_size)
+        all_scores = run_batches(
+            [lambda chunk=chunk: score_chunk(chunk) for chunk in chunks],
+            settings=self.settings, on_done=lambda _index, _result: progress.advance(),
+        )
+        for chunk, scores in zip(chunks, all_scores):
             for item in chunk:
                 score = scores.get(item["id"], {})
                 item["evaluation"] = {"score": score.get("skore"), "reason": score.get("zdovodnenie", "")}
-            progress.advance()
 
         check_batches = batch_count(len(pending), self.evaluation_batch_size)
         callback, end = progress.sub(check_batches)
@@ -651,13 +727,22 @@ def generate_all_items(
         chunks = _chunks(under_minimum, batch_size)
         progress.grow(len(chunks) - 1)
         started = time.perf_counter()
-        for chunk in chunks:
-            missing = {lo.get("id"): max(1, qs.per_section - accepted_before[lo.get("id")]) for lo in chunk}
-            result = run.generate(chunk, ORIGIN_COVERAGE, existing=run.existing_for(chunk), missing=missing)
+        calls = [
+            (chunk, run.existing_for(chunk),
+             {lo.get("id"): max(1, qs.per_section - accepted_before[lo.get("id")]) for lo in chunk})
+            for chunk in chunks
+        ]
+        results = run_batches(
+            [lambda chunk=chunk, existing=existing, missing=missing:
+             run.call_generation(chunk, existing=existing, missing=missing)
+             for chunk, existing, missing in calls],
+            settings=settings, on_done=lambda _index, _result: progress.advance(),
+        )
+        for result in results:
+            run.record_generation(result, ORIGIN_COVERAGE)
             coverage_calls += result.calls
             _, new = run.accept_new(result, ORIGIN_COVERAGE)
             coverage_pending.extend(new)
-            progress.advance()
         run.generation_seconds += time.perf_counter() - started
         if coverage_pending:
             progress.grow(run.evaluation_units(len(coverage_pending)))

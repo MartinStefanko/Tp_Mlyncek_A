@@ -1,7 +1,8 @@
 from qgen.context_builder import build_context_for_sources, build_page_map
 from qgen.config import Settings, setting_or_default
+from qgen.llm.parallel import run_batches
 from qgen.llm.retry import generate_json
-from qgen.progress import STAGE_Q_EVALUATION, batch_count, report_progress
+from qgen.progress import STAGE_Q_EVALUATION, batch_count, counting_progress, report_progress
 from qgen.questions.prompts import question_record_text
 
 
@@ -69,8 +70,8 @@ def analyze_item_faithfulness(
 
     total_batches = batch_count(len(comparable_items), batch_size)
     report_progress(progress_callback, STAGE_Q_EVALUATION, 0, total_batches)
-    for start in range(0, len(comparable_items), batch_size):
-        batch = comparable_items[start:start + batch_size]
+
+    def evaluate_batch(batch):
         evaluations = {}
         for attempt in range(1, max_batch_attempts + 1):
             evaluations = evaluate_item_faithfulness_batch(
@@ -85,7 +86,16 @@ def analyze_item_faithfulness(
                 break
             if verbose and max_batch_attempts > 1:
                 print(f"Item faithfulness batch prazdny, opakujem ({attempt}/{max_batch_attempts})")
+        return evaluations
 
+    # Step 13b: the batches run at the same time; the results are merged in their order.
+    batches = [comparable_items[start:start + batch_size] for start in range(0, len(comparable_items), batch_size)]
+    all_evaluations = run_batches(
+        [lambda batch=batch: evaluate_batch(batch) for batch in batches],
+        settings=settings,
+        on_done=counting_progress(progress_callback, STAGE_Q_EVALUATION, total_batches),
+    )
+    for batch, evaluations in zip(batches, all_evaluations):
         for item in batch:
             evaluation = evaluations.get(item["item_id"])
             if not evaluation:
@@ -100,7 +110,6 @@ def analyze_item_faithfulness(
                 row["faithful"] = row["faithfulness_score"] >= faithful_score
                 if row["faithful"]:
                     faithful_items += 1
-        report_progress(progress_callback, STAGE_Q_EVALUATION, start // batch_size + 1, total_batches)
 
     report["stats"]["items_evaluated"] = len(scores)
     if scores:

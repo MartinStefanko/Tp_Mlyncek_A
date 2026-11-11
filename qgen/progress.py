@@ -51,5 +51,18 @@ class SubProgress:
         report_progress(self.callback, stage, self.before + done, self.before + sub_total + self.after)
 
 
+def counting_progress(callback: Optional[ProgressCallback], stage: str, total: int) -> Callable[[int, object], None]:
+    """on_done of qgen.llm.parallel.run_batches: (stage, finished batches, total) after
+    every finished batch, whichever batch it was (called in the main thread only)."""
+    finished = 0
+
+    def on_done(_index: int, _result: object) -> None:
+        nonlocal finished
+        finished += 1
+        report_progress(callback, stage, finished, total)
+
+    return on_done
+
+
 def batch_count(size: int, batch_size: int) -> int:
     return (size + batch_size - 1) // batch_size if size > 0 else 0
