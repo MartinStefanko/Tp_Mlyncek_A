@@ -14,7 +14,7 @@ quality score uses a stronger model); set it empty to inherit QGEN_LLM_MODEL. Wi
 provider than gemini, QGEN_LLM_MODEL_EVAL must be set (qgen.llm.factory.check_config).
 The gemini-2.5 models of the old baseline (baseline/) return 404 to new users; the replay
 tests pass them explicitly (tests/baseline_data.py). The reference recording on the
-current models is baseline_v4 (step 13; its models and question settings are in its
+current models is baseline_v5 (its models and question settings are in its
 metrics.json and are passed explicitly by the replay tests).
 
 Model roles (role names of qgen.llm.factory in brackets):

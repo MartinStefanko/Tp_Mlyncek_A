@@ -20,6 +20,8 @@ from tests.baseline_data import (
     replay_client,
     require_baseline,
 )
+from service import worker as worker_main
+from service.jobs import runner
 from tests.fakes import FakeLLM, client_error
 from tests.worker.conftest import EKO_PDF, HEADERS, SEGMENTS, fixed_extraction, scripted_answer
 
@@ -216,6 +218,29 @@ def test_time_limit_is_internal_error(env_factory):
     error = env.status(job_id)["error"]
     assert error["code"] == "internal_error"
     assert error["details"]["reason"] == "timeout" and error["details"]["timeout_s"] == 5
+
+
+def test_failed_output_check_is_internal_error(env, monkeypatch):
+    from qgen.output import OutputCheckError
+
+    def failing_check(result, report):
+        raise OutputCheckError(["question_meta: no entry for unit 0 question 0"])
+
+    monkeypatch.setattr(runner, "check_output", failing_check)
+    job_id = env.create(SK)
+    env.work()
+    error = env.status(job_id)["error"]
+    assert error["code"] == "internal_error"
+    assert error["details"] == {"stage": "output", "error_type": "OutputCheckError"}
+    assert env.client.get(f"/v1/jobs/{job_id}/result", headers=HEADERS).status_code == 409  # nothing saved
+
+
+def test_worker_does_not_start_with_bad_config(monkeypatch):
+    from service.settings import ServiceSettings
+
+    bad = ServiceSettings(_env_file=None, llm_provider="gemini", gemini_api_key="", embed_provider="gemini")
+    monkeypatch.setattr(worker_main, "ServiceSettings", lambda: bad)
+    assert worker_main.main() == 1
 
 
 # --- cancellation ---------------------------------------------------------------------------

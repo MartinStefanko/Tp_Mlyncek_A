@@ -3,7 +3,7 @@
 Calls:
     client.models.generate_content(model=..., contents=prompt, config=GenerateContentConfig(...))
     client.models.embed_content(model=..., contents=texts)
-generate sends (step 13, baseline_v4):
+generate sends (step 13, baseline_v5):
     response_mime_type  "application/json" when json_mode=True (every prompt returns an object)
     temperature         always (QGEN_LLM_TEMPERATURE)
     max_output_tokens   only when the caller gives it (question generation)

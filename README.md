@@ -376,11 +376,11 @@ doručovania: `docker compose -f docker-compose.dev.yml logs -f webhook-worker`.
 
 Skript `tools/resilience_check.py` overí odolnosť skutočnej služby v kontajneroch
 (špecifikácia, kap. 9: test odolnosti, test 202, test mazania). Nevolá LLM API: worker
-odpovedá z nahrávky `baseline_v4/llm_calls.jsonl` (override `docker-compose.replay.yml`,
+odpovedá z nahrávky `baseline_v5/llm_calls.jsonl` (override `docker-compose.replay.yml`,
 `QGEN_LLM_PROVIDER=replay`, `QGEN_EMBED_PROVIDER=replay`). Každé volanie je umelo spomalené
 (`QGEN_LLM_REPLAY_DELAY_S`, predvolene 1 s), aby sa dal kontajner zabiť počas behu.
 
-Potrebujete Docker, lokálnu nahrávku `baseline_v4/` a `eko.pdf` (v `tests/fixtures/` alebo
+Potrebujete Docker, lokálnu nahrávku `baseline_v5/` a `eko.pdf` (v `tests/fixtures/` alebo
 `Hlavna_cast/ucebny_material/`). Porty 8000 a 9000 musia byť voľné. Skript sám spustí
 kontajnery, prijíma webhooky (port 9000) a na konci zavolá `docker compose down` (volume
 ostanú). Beží asi 15 minút, nie je súčasťou `pytest`.
@@ -413,10 +413,17 @@ Replay je iba na vývoj. Worker pri štarte zapíše do logu výrazné varovanie
 `GET /v1/info` ukáže `"llm_provider": "replay"` a `"replay": true`. So službou v režime
 replay funguje iba `eko.pdf` bez OCR. Pri inom dokumente úloha skončí `llm_error`.
 
-### Časový limit a dočasný výstup
+### Časový limit a výstup
 
-Časový limit jednej úlohy je `QGEN_JOB_TIMEOUT_S` (predvolene 3600 s). Výstup `units` je
-zatiaľ dočasný: jedna hodina, všetky otázky typu `open` (krok 14 doplní nové typy a split).
+Časový limit jednej úlohy je `QGEN_JOB_TIMEOUT_S` (predvolene 3600 s).
+
+Do databázy ECEH ide iba formát `units` (`/result`). Report (`/report`) je interná diagnostika
+kvality; Laravel ho nemusí volať. Výstup zatiaľ obsahuje jednu hodinu (rozdelenie do hodín
+príde neskôr). Krok výstupu (`qgen/output/`) dodrží dĺžkové limity ECEH: príliš dlhé zadanie,
+názov alebo možnosť služba raz pošle LLM na skrátenie. Názov, ktorý je stále dlhý, skráti na
+koniec slova. Inú otázku, ktorá je stále príliš dlhá, vyradí s varovaním `field_too_long`.
+HTML nápovedy prečistí (nh3). Pred uložením worker overí units aj report modelom, JSON schémou
+a vzájomnou zhodou.
 
 ## Pipeline z príkazového riadka (CLI)
 

@@ -42,10 +42,9 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   tabuľky learning_objects a presúva medzi hodinami (learning_object_unit). Learning object NIE JE
   jedna otázka; otázka/úloha je položka units[].questions[]. Väčšie jednotky dokumentu pre
   split topics = témy (topic). Interné funkcie pôvodných modulov sa zatiaľ nepremenúvajú.
-- Report je súčasť integrácie, nie iba diagnostika: Laravel ho ukladá celý do generations.report
-  (jsonb), z report.learning_objects[] plní tabuľku learning_objects (external_id = id LO
-  z reportu), pri otázke ukladá generation_questions.lo_ref (id learning objektu) a z kľúčových
-  slov, Bloomovej úrovne a témy (anchor) robí tagy (tags + taggables, source = llm).
+- Do databázy ECEH ide IBA formát units (GET /v1/jobs/{id}/result). Report je interná
+  diagnostika kvality (sections, question_meta, quality, warnings, timings); Laravel ho nemusí
+  volať ani ukladať. Tvar reportu sa bez dôvodu nemení.
 
 ## Cieľ generovania a referenčná nahrávka
 - Cieľ generovania: čo najviac otázok, pokrytie všetkých tematických celkov.
@@ -71,9 +70,6 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Krok 10 (worker): `InvalidTransition` pri zápise completed/failed, keď je úloha medzitým
   cancelled, je normálne ukončenie – zalogovať (info), nie chyba.
 
-## Požiadavky na ďalšie kroky (z kroku 10)
-- Krok 14: `service/jobs/legacy_output.py` je dočasný – nahradiť skutočným krokom output.
-
 ## Rozhodnutia z kroku 13 (typy otázok)
 - Všetkých 14 promptov (aj LO pipeline) vracia objekt `{"items": [...]}` (`generate_json(items_key="items")`);
   JSON režim zapnutý pri každom volaní. Iný tvar = neplatný JSON (opakovanie, potom LLMError).
@@ -89,10 +85,7 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   0.947–0.949 boli tiež preformulované otázky). baseline_v5 je nahratá s 0.94.
 
 ## Požiadavky na ďalšie kroky (z kroku 13)
-- Krok 14: poradie v hodine choice → open → no_answer, dĺžkové limity a skracovanie.
-- Krok 14: report použije názvy zo stránky Databáza – `learning_objects[]` namiesto `sections`
-  a väzba otázky cez `lo_ref` namiesto `section_id`. Kontrakt a schéma reportu
-  (qgen/contract/report.py, exportované schémy) sa upravia v kroku 14; dovtedy sa kód reportu nemení.
+- Krok 15–16: poradie v hodine choice → open → no_answer (patrí k rozdeleniu do hodín).
 
 ## Rozhodnutia z kroku 13b (paralelné volania)
 - Súbežné batche iba cez `qgen.llm.parallel.run_batches` (QGEN_LLM_MAX_CONCURRENCY; 1 = bez vlákien).
@@ -122,7 +115,7 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Limity ECEH: name ≤ 50 (skrátené na koniec slova), url ≤ 2000 – odoberajú sa posledné behy
   strán dokumentu s najviac behmi („, …“), potom celé dokumenty („; …“), nakoniec znaky.
 - options.questions.hints: 0 = bez nápovedy, ≥ 1 = jedna nápoveda so zdrojom (rozsah 0–2 a
-  predvolené 2 ostali kvôli kontraktu). legacy_output ju len pustí cez nh3. Report bez zmeny.
+  predvolené 2 ostali kvôli kontraktu). Výstup (qgen/output) ju len pustí cez nh3. Report bez zmeny.
 
 ## Oprava filtra otázok (po kroku 13c)
 - `filter_items_variant_b`: každý prah platí samostatne – skóre kvality < QGEN_QUESTION_MIN_SCORE,
@@ -132,3 +125,25 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   so skóre 2 (napr. nesprávna vzorová odpoveď) aj so zodpovedateľnosťou 1. Celok pod per_section
   po filtri dostane doplnenie pokrytia ako doteraz. Filter tematických celkov (iba vernosť) bol v poriadku.
 - baseline_v5 je nahratá až s touto opravou (commit dff7c00).
+
+## Rozhodnutia z kroku 14 (výstup units)
+- Krok output je `qgen/output/` (units.py, limits.py, sanitize.py, report.py, check.py,
+  `build_output` v `__init__.py`); neimportuje nič zo `service/` (test_import_guard).
+  `service/jobs/legacy_output.py` zmazaný. Zatiaľ jeden unit, title = názvy PDF, description =
+  zoznam tematických celkov (rozdelenie do hodín je krok 15–16).
+- Dĺžkové limity ECEH v znakoch (`len`): otázka s príliš dlhým name, description alebo choices[i]
+  dostane JEDNO volanie LLM (rola questions, JSON `{"items": [{"field", "text"}]}`, jazyk dokumentu,
+  iba príliš dlhé polia s limitmi). Text sa nahradí iba v poli s rovnakým field → poradie choices
+  a is_correct sa nemenia. Volania cez `run_batches`; progress_callback("output", …) po každom.
+- Nápovedy sa LLM neposielajú (robí ich kód v limitoch). name stále dlhší → cut_at_word;
+  description / choice / hint stále dlhší → otázka vyradená, varovanie `field_too_long`
+  (pole, dĺžka, limit, bez textu). Zlyhané volanie (LLMError) → `shortening_failed`, úloha beží ďalej.
+- hints.url cez nh3 (p, br, strong, em, ul, ol, li, code, pre, sub, sup; bez atribútov; obsah
+  script/style zahodený). Nápoveda bez textu po čistení (alebo bez name) → vyhodená, `invalid_hint`,
+  otázka ostáva. Varovania jednej otázky idú spolu, v poradí otázok, za diagnostikou pipeline.
+- Worker pred uložením volá `check_output`: Pydantic + JSON schéma (units aj report) + každá otázka
+  má práve jeden question_meta a jej section_id je v sections. Zlyhanie → internal_error
+  (stage output, error_type OutputCheckError); v logu iba cesty a druhy chýb, nie hodnoty.
+  `jsonschema` je preto v requirements-service.txt.
+- Otvorené: bod 1 špecifikácie (limity polí priamo v prompte generovania) = zmena promptu, teda
+  nová nahrávka; zatiaľ nie.

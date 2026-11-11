@@ -7,7 +7,7 @@ similar pairs and the quantiles. Pairs whose text was not embedded in the record
 skipped (the pipeline embeds the dedup text of every valid question).
 
 Usage (from the repo root):
-    venv/Scripts/python.exe tools/dedup_report.py baseline_v4 [--top 30]
+    venv/Scripts/python.exe tools/dedup_report.py baseline_v5 [--top 30]
 """
 
 import argparse
@@ -55,7 +55,7 @@ def quantile(values: list[float], q: float) -> float:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("recording", help="Recording folder, e.g. baseline_v4")
+    parser.add_argument("recording", help="Recording folder, e.g. baseline_v5")
     parser.add_argument("--top", type=int, default=30, help="Number of most similar pairs to print.")
     args = parser.parse_args(argv)
 

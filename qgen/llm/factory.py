@@ -23,7 +23,7 @@ get_embedder before a client is built):
                        keys optional (a local server needs none): QGEN_LLM_API_KEY for the
                        LLM, QGEN_EMBED_API_KEY for embeddings (empty = QGEN_LLM_API_KEY)
     anthropic          ANTHROPIC_API_KEY; LLM only (no embedding API)
-    replay             QGEN_LLM_REPLAY_PATH (an existing recording, e.g. baseline_v4/llm_calls.jsonl);
+    replay             QGEN_LLM_REPLAY_PATH (an existing recording, e.g. baseline_v5/llm_calls.jsonl);
                        development only: answers from the recording (qgen.llm.adapters.replay).
                        Never refused, but check_config logs a loud warning every time. One
                        client serves both roles when LLM and embeddings are replay.

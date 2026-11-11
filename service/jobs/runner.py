@@ -4,8 +4,9 @@
     2. queued → running (the store adds 1 to attempts), check_config
     3. extraction of input/*.pdf (options: OCR), check that some page has text
     4. run_pipeline (options: language, questions) with a progress callback
-    5. output: temporary mapping to units + report (service.jobs.legacy_output, step 14)
-    6. save result.json and report.json, running → completed, delete the PDFs
+    5. output (qgen.output.build_output): units + report, length limits (shortening by the LLM)
+    6. check of the output (qgen.output.check_output: models, JSON Schemas, report ↔ units)
+    7. save result.json and report.json, running → completed, delete the PDFs
 
 Progress (ProgressWriter): stage and progress go to job.json at most every
 PROGRESS_INTERVAL_S or when the step changes. The same locked write checks for
@@ -13,7 +14,8 @@ cancellation: a cancelled job raises JobCancelled and the run stops. The callbac
 checks the job's own time limit (QGEN_JOB_TIMEOUT_S).
 
 Errors → failed (error.code): LLMError → llm_error; no text / OCR missing / unreadable PDF
-→ extraction_failed; time limit, configuration and every other error → internal_error.
+→ extraction_failed; time limit, configuration, failed output check and every other error
+→ internal_error.
 The message never has a prompt or document text. The PDFs of a failed job stay for retry
 (QGEN_FAILED_INPUT_TTL_HOURS). A cancelled job (also InvalidTransition when writing the
 final state after a cancel) is a normal end: logged, PDFs deleted.
@@ -38,10 +40,10 @@ from qgen.extraction.text_extraction import OcrUnavailableError, pdfs_to_text
 from qgen.llm.base import EmbeddingClient, LLMClient
 from qgen.llm.errors import LLMConfigError, LLMError
 from qgen.llm.factory import check_config, get_embedder, get_llm
+from qgen.output import OutputCheckError, build_output, check_output
 from qgen.pipeline import run_pipeline
 from qgen.progress import PIPELINE_STAGES
 from service.jobs.events import JobEvents
-from service.jobs.legacy_output import build_output
 from service.jobs.models import JobRecord
 from service.jobs.store import InvalidTransition, JobNotFound, JobStore
 
@@ -265,9 +267,17 @@ class JobRunner:
 
         progress("output", 0, 1)
         step_started = time.perf_counter()
-        output = build_output(result, record, timings=timings)
+        output = build_output(
+            result,
+            input_names=[f.name for f in record.input_files],
+            timings=timings,
+            settings=self.settings,
+            llm=llm,
+            progress_callback=progress,
+        )
         output.report.timings["output"] = round(time.perf_counter() - step_started, 4)
         progress.check_deadline()
+        check_output(output.result, output.report)
         self.store.save_result(job_id, output.result)
         self.store.save_report(job_id, output.report)
         logger.info(
@@ -387,6 +397,13 @@ class JobRunner:
         if isinstance(exc, ExtractionError):
             return JobError(
                 code="extraction_failed", message="The PDF could not be read.", details={"error_type": str(exc)}
+            )
+        if isinstance(exc, OutputCheckError):
+            logger.error("output check failed job_id=%s problems=%s", record.job_id, "; ".join(exc.problems[:5]))
+            return JobError(
+                code="internal_error",
+                message="The output did not pass its check.",
+                details={"stage": stage, "error_type": type(exc).__name__},
             )
         if _is_rq_timeout(exc):
             return _timeout_error(self.settings.job_timeout_s, stage)

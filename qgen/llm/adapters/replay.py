@@ -1,9 +1,9 @@
 """Replay: answers LLM / embedding calls from a recording (JSONL) instead of an API.
 
-Reads the file written by ``tools/recording_client.py`` (e.g. baseline_v4/llm_calls.jsonl).
+Reads the file written by ``tools/recording_client.py`` (e.g. baseline_v5/llm_calls.jsonl).
 Two users:
 
-    ReplayClient  tests (replay tests on baseline_v4/). Answers are used up; a call without a
+    ReplayClient  tests (replay tests on baseline_v5/). Answers are used up; a call without a
                   (remaining) answer raises ``UnrecordedCallError`` (BaseException), which
                   stops the run at once and shows the prompt.
     ReplayLLM     the service in development (QGEN_LLM_PROVIDER=replay and / or

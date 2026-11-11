@@ -45,3 +45,16 @@ def test_no_raw_client_calls_outside_llm_package():
         and RAW_CLIENT_CALL.search(path.read_text(encoding="utf-8-sig"))
     ]
     assert offenders == []
+
+
+SERVICE_IMPORT = re.compile(r"^\s*(?:import|from)\s+service\b", re.M)
+
+
+def test_qgen_does_not_import_service():
+    """qgen (incl. qgen/output, step 14) is the core; only service/ builds on it."""
+    offenders = [
+        str(path.relative_to(REPO))
+        for path in (REPO / "qgen").rglob("*.py")
+        if "__pycache__" not in path.parts and SERVICE_IMPORT.search(path.read_text(encoding="utf-8-sig"))
+    ]
+    assert offenders == []
