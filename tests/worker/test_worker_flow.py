@@ -57,9 +57,9 @@ def test_post_worker_completed_result_and_report(env):
     assert (first.type, first.time_to_handle, first.time_to_explain) == ("choice", 60, 30)
     assert first.name == "Otázka 1"
     assert [c.is_correct for c in first.choices] == [True, False, False, False]
-    # one hint -> name "Nápoveda"; <b> is not an allowed tag, nh3 removes it
-    assert [h.model_dump() for h in first.hints] == [{"name": "Nápoveda", "url": "<p>Pozri definíciu.</p>"}]
-    assert [h.name for h in questions[1].hints] == ["Ľahká nápoveda", "Ťažká nápoveda"]
+    # step 13c: hints of the LLM are ignored; one hint with the original file name and page
+    assert [h.model_dump() for h in first.hints] == [{"name": "Zdroj", "url": "<p>bio.pdf, strana 1</p>"}]
+    assert [h.model_dump() for h in questions[3].hints] == [{"name": "Zdroj", "url": "<p>bio.pdf, strana 2</p>"}]
     assert questions[2].choices[0].text == "Odpoveď 3/1."
     assert [s.id for s in report.sections] == ["S-1", "S-2", "S-3"]
     meta = report.question_meta[0]

@@ -100,7 +100,32 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   v dedup/zozname existujúcich otázok mohla mať iné poradie – v baseline_v4 sa nevyskytuje.
 
 ## Požiadavky na ďalšie kroky (z kroku 13b)
-- Krok 13c: nápoveda bude obsahovať iba odkaz na názov dokumentu a číslo strany (napr.
-  „Pozri: eko.pdf, strana 14“). Vytvorí ju kód zo zdrojov otázky (source pages), nie LLM;
-  prompty prestanú nápovedy pýtať. Je to požiadavka tímu; ruší pôvodné pravidlo, že nápovedy
-  nesmú odkazovať na strany. V kroku 13b sa nápovedy ani prompty nemenia.
+- HOTOVÉ v kroku 13c: nápoveda obsahuje iba odkaz na názov dokumentu a strany, vytvára ju kód
+  zo zdrojov otázky, nie LLM (požiadavka tímu; ruší pravidlo, že nápovedy nesmú odkazovať na strany).
+
+## Rozhodnutia z kroku 13c (nápovedy)
+- LLM nápovedy nepíše ani nehodnotí: žiadny prompt (generovanie, doplňujúce kolo, pokrytie,
+  skóre kvality vrátane {items_text}) o nich nič neobsahuje; "hints" z odpovede LLM sa ignoruje.
+  Zrušené: mená „Ľahká/Ťažká nápoveda“, varovania hint_page_reference (aj kontrola zadania)
+  a hints_missing. Relevancia k celku (embedding) nápovedu nepoužíva.
+- Vytvára ju `qgen/questions/hints.py` (`build_source_hints`) na konci pipeline otázok (krok 5,
+  po attach_source_names). Strany: vlastný `source` otázky (iba strany, ktoré v dokumente sú,
+  a dokument s názvom); ak nie je platný žiadny, `citovane_zdroje` jej tematického celku;
+  inak `hints: []`. Názov dokumentu = `source_name` segmentov = InputFile.name (nie D1.pdf).
+- Formát: jedna nápoveda `{"name": "Zdroj", "url": "<p>eko.pdf, strana 14</p>"}`; rozsah
+  „strany 14 – 15“, nesúvislé „strany 14, 16“ (mix „strany 3 – 5, 9“), viac dokumentov v poradí
+  nahrania oddelené „; “ („eko.pdf, strana 4; uvod.pdf, strany 2 – 3“). EN dokument: „Source“,
+  „page 14“ / „pages 14 – 15“. Text je HTML-escapovaný v `<p>`. Šablóny QGEN_HINT_NAME_SK/EN,
+  QGEN_HINT_PAGE_SK/EN (1 strana), QGEN_HINT_PAGES_SK/EN ({file}, {pages} povinné).
+- Limity ECEH: name ≤ 50 (skrátené na koniec slova), url ≤ 2000 – odoberajú sa posledné behy
+  strán dokumentu s najviac behmi („, …“), potom celé dokumenty („; …“), nakoniec znaky.
+- options.questions.hints: 0 = bez nápovedy, ≥ 1 = jedna nápoveda so zdrojom (rozsah 0–2 a
+  predvolené 2 ostali kvôli kontraktu). legacy_output ju len pustí cez nh3. Report bez zmeny.
+- Replay testy nad baseline_v4 sú preskočené (`tests/baseline_data.AWAITING_BASELINE`,
+  „čaká na baseline_v5“). Po nahratí v5: BASELINE_DIR → baseline_v5, AWAITING_BASELINE = None,
+  aktualizovať tento dokument (referenčná nahrávka).
+
+## Otvorené body (z kroku 13c)
+- Nahrať baseline_v5 (zmena promptov) a prepnúť na ňu replay testy.
+- docker-compose.replay.yml a tools/resilience_check.py stále používajú baseline_v4
+  (prompty už nesedia) – prepnúť na v5 po jej nahratí.

@@ -10,10 +10,7 @@
           "type": "choice",
           "time_to_handle": 90,
           "time_to_explain": 30,
-          "hints": [
-            { "name": "Ľahká nápoveda", "url": "<p>Čo dostane investor späť na konci obdobia?</p>" },
-            { "name": "Ťažká nápoveda", "url": "<p>Pozrite sa na vzťah medzi istinou a úrokom.</p>" }
-          ],
+          "hints": [ { "name": "Zdroj", "url": "<p>eko.pdf, strana 14</p>" } ],
           "choices": [
             { "text": "Je to súčet istiny a prislúchajúceho úroku", "is_correct": true },
             { "text": "Na konci obdobia ju investor dostane späť", "is_correct": true },
@@ -26,7 +23,7 @@
           "type": "open",
           "time_to_handle": 300,
           "time_to_explain": 60,
-          "hints": [ { "name": "Nápoveda", "url": "<p>Zamyslite sa nad plynutím času a rizikom.</p>" } ],
+          "hints": [ { "name": "Zdroj", "url": "<p>eko.pdf, strany 14 – 15</p>" } ],
           "choices": [
             {
               "text": "Euro dnes má väčšiu cenu ako euro v budúcnosti a isté euro je cennejšie ako riskantné.",

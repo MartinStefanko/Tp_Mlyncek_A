@@ -27,8 +27,13 @@ class _ContractModel(BaseModel):
 
 
 class Hint(_ContractModel):
-    name: str = Field(min_length=1, max_length=HINT_NAME_MAX, description="Hint level, e.g. 'Ľahká nápoveda'.")
-    url: str = Field(max_length=HINT_URL_MAX, description="HTML text of the hint, e.g. '<p>…</p>'.")
+    name: str = Field(
+        min_length=1, max_length=HINT_NAME_MAX, description="Hint name, e.g. 'Zdroj' ('Source' for an English document)."
+    )
+    url: str = Field(
+        max_length=HINT_URL_MAX,
+        description="HTML text of the hint: the source document and pages, e.g. '<p>eko.pdf, strana 14</p>'.",
+    )
 
 
 class Choice(_ContractModel):

@@ -13,7 +13,8 @@ content of each section (tematický celok) allows.
        faithfulness with the check of the choice marking, answerability, filter
     4. coverage: sections with fewer accepted questions than per_section get one more
        call; the new questions go through 2-3 as well
-    5. relevance to the section (all questions), ordering, ids 1..n
+    5. relevance to the section (all questions), ordering, ids 1..n, hints: one hint with
+       the document name and pages (qgen.questions.hints; the LLM writes no hints, step 13c)
 
 Step 13b: the calls of one step run at the same time (QGEN_LLM_MAX_CONCURRENCY,
 qgen.llm.parallel): the first calls of all batches, then each extra round for all batches
@@ -55,6 +56,7 @@ from qgen.progress import STAGE_Q_EVALUATION, STAGE_QUESTIONS, ProgressCallback,
 from qgen.questions.answerability import analyze_item_answerability
 from qgen.questions.dedup import SectionDeduplicator
 from qgen.questions.faithfulness import analyze_item_faithfulness
+from qgen.questions.hints import build_source_hints
 from qgen.questions.prompts import (
     build_coverage_section,
     build_extra_round_section,
@@ -74,7 +76,7 @@ from qgen.questions.types import (
     normalize_sources,
     type_permission_problem,
 )
-from qgen.questions.validation import WARNING_PAGE_REFERENCE, validate_items
+from qgen.questions.validation import validate_items
 
 __all__ = [
     "QuestionPipelineResult",
@@ -297,6 +299,17 @@ def item_sort_key(item, lo_order):
 def attach_source_names(items, source_name_map):
     for item in items:
         item["source_files"] = resolve_source_names(item.get("source", []), source_name_map)
+    return items
+
+
+def attach_source_hints(items, run: "_QuestionRun"):
+    """One hint with the document name and pages per question (krok 13c; LLM writes none):
+    from the question's own sources, else from the pages of its section."""
+    for item in items:
+        item["hints"] = build_source_hints(
+            item, run.sections.get(item.get("lo_id")), source_name_map=run.source_name_map,
+            allowed_refs=run.allowed_pages, language=run.language, count=run.qs.hints, settings=run.settings,
+        )
     return items
 
 
@@ -763,6 +776,7 @@ def generate_all_items(
     for item in all_items:
         item["id"] = new_ids[item["id"]]
     attach_source_names(all_items, run.source_name_map)
+    attach_source_hints(all_items, run)
     item_faithfulness_report = _renumber_rows(merge_check_reports(faithfulness_reports, "faithfulness"), new_ids)
     item_answerability_report = _renumber_rows(merge_check_reports(answerability_reports, "answerability"), new_ids)
     item_validation_report = validate_items(all_items, allowed_pages=run.allowed_pages,
@@ -881,14 +895,6 @@ def build_question_diagnostics(
             "message": f"Question {item['id']} (section {item.get('lo_id')}) dropped: option(s) {letters} marked wrongly",
             "section_id": item.get("lo_id"),
             "question_id": item["id"],
-        })
-    page_refs = sorted({w["item_id"] for w in validation_report.get("warning_items", [])
-                        if w.get("code") == WARNING_PAGE_REFERENCE and w.get("item_id") is not None})
-    if page_refs:
-        warnings.append({
-            "code": WARNING_PAGE_REFERENCE,
-            "message": f"{len(page_refs)} question(s) refer to pages or chapters of the document: {page_refs}",
-            "question_ids": page_refs,
         })
     low_share = []
     if "choice" in qs.types and len(qs.types) > 1:

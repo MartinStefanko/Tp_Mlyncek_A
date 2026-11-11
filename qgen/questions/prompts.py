@@ -4,12 +4,15 @@ Every prompt asks for a JSON object {"items": [...]} (JSON mode of every provide
 templates use <<name>> placeholders filled by str.replace, so the JSON braces in the text
 need no escaping. The faithfulness and answerability prompts live in their modules and use
 the record texts from here.
+
+Step 13c: no prompt asks for hints or shows them; the hint is built by the code from the
+sources of the question (qgen.questions.hints).
 """
 
 from __future__ import annotations
 
 from qgen.config import Settings
-from qgen.questions.types import QuestionSettings, hints_rule_text, type_rules_text
+from qgen.questions.types import QuestionSettings, type_rules_text
 
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
@@ -35,7 +38,7 @@ OBSAH:
 - Otázky vychádzajú iba z textu svojho tematického celku. NEvymýšľaj informácie, ktoré v texte nie sú.
 - Zadanie je samostatná vecná otázka o učive (definícia, rozdiel, príčina, postup, vlastnosť, výpočet, použitie).
 - Študent text ani dokument nemá. NEpíš „Prečítaj si text…“, „Na základe textu…“ a neodkazuj na strany, kapitoly, obrázky ani časti dokumentu (nie „podľa príkladu na strane 66“). Ak otázka stavia na príklade z textu, uveď v zadaní všetky jeho údaje.
-- Zadanie, možnosti, nápovedy a kľúčové slová píš po slovensky.
+- Zadanie, možnosti a kľúčové slová píš po slovensky.
 
 TYPY OTÁZOK:
 <<type_rules>>
@@ -44,9 +47,6 @@ PRAVIDLÁ PRE TYPY:
 - "choice": v "choices" presne <<choice_options>> možností. Správna je jedna alebo viac možností ("is_correct": true), ostatné majú "is_correct": false. Nesprávne možnosti sú vierohodné a pochádzajú z toho istého učiva (zámena pojmov, častá chyba, chybný výpočet). Nepoužívaj možnosti typu „všetky uvedené“ ani „žiadna z uvedených“. Žiadne dve možnosti nemajú rovnaký text ani význam. Poradie správnych možností striedaj.
 - "open": v "choices" práve jedna položka {"text": "<vzorová odpoveď>", "is_correct": true}. Vzorová odpoveď je krátka a presná (pojem, číslo s jednotkou alebo jedna veta), lebo ju učiteľ hodnotí ručne alebo presnou zhodou. Pri praktickej úlohe ("practical": true) je v nej vzorové riešenie s postupom a výsledkom.
 - "no_answer": úloha, ktorá sa nevyhodnocuje (napíš esej, zamysli sa, prediskutuj). Zadanie je jasné a súvisí s učivom tematického celku. "choices" je prázdne pole [].
-
-NÁPOVEDY:
-<<hints_rules>>
 
 ČASY:
 - "time_to_handle" je čas v sekundách, ktorý študent potrebuje na vypracovanie; "time_to_explain" je čas, ktorý učiteľ potrebuje na vysvetlenie riešenia. Odhadni ich podľa náročnosti otázky.
@@ -63,7 +63,6 @@ Vráť LEN validný JSON objekt {"items": [...]} bez ďalšieho textu. Každá p
 - "type": "choice", "open" alebo "no_answer",
 - "practical": true pri praktickej úlohe (výpočet, postup), inak false,
 - "choices": pole objektov {"text": "...", "is_correct": true alebo false} podľa pravidiel typu,
-- "hints": pole nápovied (HTML reťazce) v poradí od najľahšej,
 - "time_to_handle": celé číslo (sekundy),
 - "time_to_explain": celé číslo (sekundy),
 - "bloom_level": úroveň otázky, jedno z: Zapamätať si, Pochopiť, Aplikovať, Analyzovať, Hodnotiť, Vytvoriť,
@@ -84,7 +83,7 @@ CONTENT:
 - Questions are based only on the text of their section. Do NOT invent information that is not in the text.
 - The question is a standalone, content-focused question about the subject matter (definition, difference, cause, procedure, property, calculation, application).
 - The student has neither the text nor the document. Do NOT write "Read the text...", "Based on the text..." and do not refer to pages, chapters, figures or parts of the document (not "according to the example on page 66"). If a question builds on an example from the text, give all its data in the question.
-- Write the question, choices, hints and keywords in English.
+- Write the question, choices and keywords in English.
 
 QUESTION TYPES:
 <<type_rules>>
@@ -93,9 +92,6 @@ RULES PER TYPE:
 - "choice": exactly <<choice_options>> options in "choices". One or more options are correct ("is_correct": true), the others have "is_correct": false. Wrong options are plausible and come from the same subject matter (confused concepts, a common mistake, a wrong calculation). Do not use options like "all of the above" or "none of the above". No two options have the same text or meaning. Vary the position of the correct options.
 - "open": exactly one entry in "choices": {"text": "<model answer>", "is_correct": true}. The model answer is short and exact (a term, a number with its unit or one sentence), because the teacher grades it by hand or by exact match. For a practical task ("practical": true) it is a model solution with the steps and the result.
 - "no_answer": a task that is not graded (write an essay, reflect, discuss). The task is clear and related to the subject matter of the section. "choices" is an empty array [].
-
-HINTS:
-<<hints_rules>>
 
 TIMES:
 - "time_to_handle" is the time in seconds the student needs to work on the question; "time_to_explain" is the time the teacher needs to explain the solution. Estimate them from the difficulty of the question.
@@ -112,21 +108,12 @@ Return ONLY a valid JSON object {"items": [...]} with no extra text. Every entry
 - "type": "choice", "open" or "no_answer",
 - "practical": true for a practical task (calculation, procedure), else false,
 - "choices": array of objects {"text": "...", "is_correct": true or false} by the rules per type,
-- "hints": array of hints (HTML strings), easiest first,
 - "time_to_handle": integer (seconds),
 - "time_to_explain": integer (seconds),
 - "bloom_level": level of the question, one of these exact Slovak values: Zapamätať si, Pochopiť, Aplikovať, Analyzovať, Hodnotiť, Vytvoriť,
 - "keywords": 1 to 5 keywords of the question,
 - "source": pages the question is based on, as document:page, e.g. ["D1:12", "D1:13"].
 """
-
-HINT_RULES_SK = """- Nápoveda nesmie prezradiť odpoveď ani správnu možnosť.
-- Nápoveda nesmie odkazovať na strany, kapitoly ani časti dokumentu (nie „pozrite si stranu 14“) – študent dokument nemá. Navádza obsahom: na ktorý pojem, vzťah alebo krok postupu sa má študent zamerať.
-- Nápoveda je HTML, napr. "<p>…</p>". Používaj iba značky p, br, strong, em, ul, ol, li, code, pre, sub, sup."""
-
-HINT_RULES_EN = """- A hint must not reveal the answer or the correct option.
-- A hint must not refer to pages, chapters or parts of the document (not "see page 14") – the student does not have the document. It guides by content: which concept, relationship or step of the procedure to focus on.
-- A hint is HTML, e.g. "<p>…</p>". Use only the tags p, br, strong, em, ul, ol, li, code, pre, sub, sup."""
 
 EXTRA_ROUND_SK = """
 DOPLŇUJÚCE KOLO:
@@ -218,15 +205,11 @@ def build_item_generation_prompt(
     qs = qs or QuestionSettings()
     settings = settings or Settings.model_construct()
     english = document_language == "en"
-    hints_lines = ["- " + hints_rule_text(qs, document_language)]
-    if qs.hints > 0:
-        hints_lines.append(HINT_RULES_EN if english else HINT_RULES_SK)
     return _fill(
         GENERATION_EN if english else GENERATION_SK,
         per_section=qs.per_section,
         type_rules=type_rules_text(qs, settings, document_language),
         choice_options=qs.choice_options,
-        hints_rules="\n".join(hints_lines),
         lo_blocks=lo_blocks,
         extra_section=extra_section,
     )
@@ -237,11 +220,11 @@ def build_item_generation_prompt(
 _LABELS = {
     "sk": {
         "type": "typ", "question": "zadanie", "choices": "možnosti", "correct": "správna", "wrong": "nesprávna",
-        "answer": "vzorová odpoveď", "no_answer": "odpoveď: (úloha sa nevyhodnocuje)", "hints": "nápovedy",
+        "answer": "vzorová odpoveď", "no_answer": "odpoveď: (úloha sa nevyhodnocuje)",
     },
     "en": {
         "type": "type", "question": "question", "choices": "options", "correct": "correct", "wrong": "wrong",
-        "answer": "model answer", "no_answer": "answer: (the task is not graded)", "hints": "hints",
+        "answer": "model answer", "no_answer": "answer: (the task is not graded)",
     },
 }
 
@@ -250,8 +233,7 @@ def _labels(document_language: str) -> dict:
     return _LABELS["en" if document_language == "en" else "sk"]
 
 
-def question_record_text(item: dict, document_language: str = "sk", *, marks: bool, hints: bool = False,
-                         prefix: str = "") -> str:
+def question_record_text(item: dict, document_language: str = "sk", *, marks: bool, prefix: str = "") -> str:
     """Type, question and answer of one question as prompt lines.
 
     marks=True: choice options with [correct]/[wrong] and the model answer of open
@@ -276,10 +258,6 @@ def question_record_text(item: dict, document_language: str = "sk", *, marks: bo
             lines.append(f"{prefix}{labels['answer']}: {answer}")
     elif marks:
         lines.append(f"{prefix}{labels['no_answer']}")
-    if hints:
-        texts = [str(h.get("url", "")) for h in item.get("hints") or [] if isinstance(h, dict)]
-        joined = " ".join(f"{n}) {text}" for n, text in enumerate(texts, start=1))
-        lines.append(f"{prefix}{labels['hints']}: {joined}")
     return "\n".join(lines)
 
 
@@ -292,8 +270,7 @@ Hodnoť podľa:
 - jasnosti a jednoznačnosti zadania,
 - pri "choice": či sú nesprávne možnosti vierohodné a z toho istého učiva a či otázka nemá viac výkladov,
 - pri "open": či je vzorová odpoveď krátka a presná; pri praktickej úlohe či je riešenie správne a má postup,
-- pri "no_answer": či je zadanie jasné a súvisí s učivom,
-- vhodnosti nápovied: nesmú prezradiť odpoveď ani odkazovať na strany alebo časti dokumentu.
+- pri "no_answer": či je zadanie jasné a súvisí s učivom.
 
 Otázky na hodnotenie:
 <<items_text>>
@@ -311,8 +288,7 @@ Evaluate according to:
 - clarity and unambiguity of the question,
 - for "choice": whether the wrong options are plausible and from the same subject matter, and whether the question has only one reading,
 - for "open": whether the model answer is short and exact; for a practical task whether the solution is correct and shows the steps,
-- for "no_answer": whether the task is clear and related to the subject matter,
-- quality of the hints: they must not reveal the answer or refer to pages or parts of the document.
+- for "no_answer": whether the task is clear and related to the subject matter.
 
 Questions to evaluate:
 <<items_text>>
@@ -328,7 +304,7 @@ def evaluation_items_text(items: list[dict], document_language: str = "sk") -> s
         parts.append(
             f"Item id: {item.get('id')}\n"
             f"- lo_id: {item.get('lo_id')}\n"
-            + question_record_text(item, document_language, marks=True, hints=True, prefix="- ")
+            + question_record_text(item, document_language, marks=True, prefix="- ")
         )
     return "\n\n".join(parts)
 

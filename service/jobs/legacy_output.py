@@ -9,7 +9,8 @@ in the contract shape (qgen.questions.types), so the mapping is:
     name            name from the LLM, cut at a word end at 255 characters
                     (empty: title of the question's section)
     description, type, time_*, choices   as returned by the pipeline
-    hints           as returned by the pipeline; url (HTML) cleaned by nh3
+    hints           as returned by the pipeline (one hint with the document name and pages,
+                    qgen.questions.hints, step 13c); url (HTML) cleaned by nh3 once more
 
 A question that does not pass the units contract is left out with a report warning.
 The report: sections from the accepted sections, question_meta per question, quality

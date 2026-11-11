@@ -136,11 +136,12 @@ def test_prompt_uses_options_and_never_refers_to_pages():
     qs = QuestionSettings(choice_options=5, hints=1)
     prompt = build_item_generation_prompt("x", "sk", qs, _settings())
     assert 'v "choices" presne 5 možností' in prompt
-    assert 'presne 1 nápovedu' in prompt
-    assert "nesmie odkazovať na strany, kapitoly ani časti dokumentu" in prompt
+    assert "neodkazuj na strany, kapitoly, obrázky ani časti dokumentu" in prompt
     assert "„všetky uvedené“ ani „žiadna z uvedených“" in prompt
-    none = build_item_generation_prompt("x", "en", QuestionSettings(hints=0), _settings())
-    assert '"hints" is an empty array [].' in none and "must not reveal the answer" not in none
+    # step 13c: the hint option does not change the prompt (hints are made by the code)
+    for hints in (0, 2):
+        assert build_item_generation_prompt("x", "sk", QuestionSettings(choice_options=5, hints=hints),
+                                            _settings()) == prompt
 
 
 def test_replay_markers_match_the_prompts():
@@ -333,26 +334,22 @@ def test_rules_are_the_contract_rules():
 # --- hints, times, Bloom, keywords --------------------------------------------------------------------
 
 
-def test_hints_are_html_with_level_names_and_trimmed():
-    raw = question(1, 1, hints=["Zamerajte sa na <vzťah> medzi pojmami.", "<p>Druhá</p>", "<p>Tretia</p>"])
-    item, _ = normalize_generated_item(raw, SECTIONS[0], QuestionSettings(hints=2))
-    assert item["hints"] == [
-        {"name": "Ľahká nápoveda", "url": "<p>Zamerajte sa na &lt;vzťah&gt; medzi pojmami.</p>"},
-        {"name": "Ťažká nápoveda", "url": "<p>Druhá</p>"},
-    ]
-    item, _ = normalize_generated_item(raw, SECTIONS[0], QuestionSettings(hints=1), "en")
-    assert [h["name"] for h in item["hints"]] == ["Hint"]
-    item, _ = normalize_generated_item(raw, SECTIONS[0], QuestionSettings(hints=0))
-    assert item["hints"] == []
+def test_hints_of_the_llm_are_ignored():
+    """Step 13c: the LLM writes no hints; normalization leaves [] (the pipeline builds the
+    source hint at the end, tests/test_source_hints.py)."""
+    raw = question(1, 1, hints=["<p>Pozrite si stranu 14.</p>", "<p>Druhá</p>"])
+    for hints in (0, 1, 2):
+        item, _ = normalize_generated_item(raw, SECTIONS[0], QuestionSettings(hints=hints))
+        assert item["hints"] == []
 
 
-@pytest.mark.parametrize("hint", ["<p>Pozrite si stranu 14.</p>", "<p>Pozri kapitolu 2.</p>", "<p>Strana 3</p>"])
-def test_hint_with_a_page_reference_is_a_warning(hint):
-    model = Model(lambda ids, prompt: items([question(1, 1, hints=[hint, "<p>ok</p>"])]))
+def test_page_reference_is_no_warning_any_more():
+    model = Model(lambda ids, prompt: items([question(1, 1, description="Čo je na strane 14?")]))
     result, diagnostics = _run(model, sections=SECTIONS[:1])
-    assert len(result.questions) == 1  # the question stays
-    assert diagnostics["validation_warnings"] == {"hint_page_reference": 1}
-    assert [w["code"] for w in diagnostics["warnings"]] == ["hint_page_reference"]
+    assert len(result.questions) == 1
+    assert "hint_page_reference" not in diagnostics["validation_warnings"]
+    assert "hints_missing" not in diagnostics["validation_warnings"]
+    assert [w["code"] for w in diagnostics["warnings"]] == []
 
 
 @pytest.mark.parametrize("question_type, raw, expected", [

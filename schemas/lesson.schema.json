@@ -28,14 +28,14 @@
       "additionalProperties": false,
       "properties": {
         "name": {
-          "description": "Hint level, e.g. 'Ľahká nápoveda'.",
+          "description": "Hint name, e.g. 'Zdroj' ('Source' for an English document).",
           "maxLength": 50,
           "minLength": 1,
           "title": "Name",
           "type": "string"
         },
         "url": {
-          "description": "HTML text of the hint, e.g. '<p>…</p>'.",
+          "description": "HTML text of the hint: the source document and pages, e.g. '<p>eko.pdf, strana 14</p>'.",
           "maxLength": 2000,
           "title": "Url",
           "type": "string"

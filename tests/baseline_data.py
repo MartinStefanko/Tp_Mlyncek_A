@@ -12,6 +12,10 @@ the test when a file is missing.
 
 The former baseline/ (gemini-2.5) and baseline_v3/ (old question format, before step 13)
 are historical records only; no test uses them.
+
+Step 13c changed the prompts (no hints), so the prompts of baseline_v4 no longer match:
+every replay test is skipped ("čaká na baseline_v5") until the new recording baseline_v5
+exists. Then point BASELINE_DIR to it and set AWAITING_BASELINE = None.
 """
 
 import json
@@ -35,7 +39,13 @@ REQUIRED_FILES = (
 )
 
 
+# Reason why the replay tests are skipped; None = run them on BASELINE_DIR.
+AWAITING_BASELINE = "čaká na baseline_v5"
+
+
 def require_baseline() -> None:
+    if AWAITING_BASELINE:
+        pytest.skip(AWAITING_BASELINE)
     missing = [name for name in REQUIRED_FILES if not (BASELINE_DIR / name).is_file()]
     if missing:
         pytest.skip(f"Recording {BASELINE_NAME} is missing locally: {', '.join(missing)}")

@@ -8,9 +8,8 @@ without choices), is_correct that is not a bool, an "all / none of the above" ch
 
 Warnings (the question stays), with a code in `warning_counts` / `warning_items`:
     choice_count_mismatch   number of choices != options.questions.choice_options
-    hints_missing           fewer hints than options.questions.hints
-    hint_page_reference     a hint or the question mentions pages / chapters
-                            (regex "stran|strana|kapitol"; the student has no PDF in ECEH)
+Hints are not checked here: the LLM writes none, the pipeline builds them from the sources
+at the end (qgen.questions.hints, krok 13c); only "hints" must be a list.
 Length limits are the output step (krok 14).
 """
 
@@ -20,7 +19,7 @@ from typing import Optional
 
 from qgen.context_builder import parse_source_ref_strings
 from qgen.contract.units import type_rule_errors
-from qgen.questions.types import FORBIDDEN_CHOICE_RE, PAGE_REFERENCE_RE, QUESTION_TYPES, QuestionSettings
+from qgen.questions.types import FORBIDDEN_CHOICE_RE, QUESTION_TYPES, QuestionSettings
 
 REQUIRED_ITEM_FIELDS = {
     "id",
@@ -38,8 +37,6 @@ REQUIRED_ITEM_FIELDS = {
 ALLOWED_ITEM_TYPES = set(QUESTION_TYPES)
 
 WARNING_CHOICE_COUNT = "choice_count_mismatch"
-WARNING_HINTS_MISSING = "hints_missing"
-WARNING_PAGE_REFERENCE = "hint_page_reference"
 
 
 def validate_items_json_text(text, allowed_pages=None, valid_lo_ids=None, question_settings=None):
@@ -161,18 +158,9 @@ def validate_items(data, allowed_pages=None, valid_lo_ids=None, question_setting
                     warn(WARNING_CHOICE_COUNT, item_id, prefix,
                          f"ma {len(pairs)} moznosti namiesto {qs.choice_options}.")
 
-        hints = item.get("hints")
-        if not isinstance(hints, list):
+        if not isinstance(item.get("hints"), list):
             report["errors"].append(f"{prefix} ma nespravny typ pola 'hints' (ocakavany zoznam).")
             item_valid = False
-            hints = []
-        elif len(hints) < qs.hints:
-            warn(WARNING_HINTS_MISSING, item_id, prefix, f"ma {len(hints)} napovedy namiesto {qs.hints}.")
-        hint_texts = [str(h.get("url", "")) for h in hints if isinstance(h, dict)]
-        if any(PAGE_REFERENCE_RE.search(text) for text in hint_texts):
-            warn(WARNING_PAGE_REFERENCE, item_id, prefix, "ma v napovede odkaz na stranu alebo kapitolu.")
-        elif PAGE_REFERENCE_RE.search(str(item.get("description", ""))):
-            warn(WARNING_PAGE_REFERENCE, item_id, prefix, "ma v zadani odkaz na stranu alebo kapitolu.")
 
         if not validate_sources(item.get("source"), prefix, report, known_sources):
             item_valid = False

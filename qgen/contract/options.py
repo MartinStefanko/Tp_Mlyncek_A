@@ -50,7 +50,16 @@ class QuestionOptions(_OptionsModel):
     choice_options: Optional[int] = Field(
         default=None, ge=2, le=10, description="Number of options for a choice question. Default: 4."
     )
-    hints: Optional[int] = Field(default=None, ge=0, le=2, description="Number of hints (e.g. easy and hard). Default: 2.")
+    hints: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=2,
+        description=(
+            "0 = no hint; 1 or more = one hint with the source of the question (original document "
+            "name and page numbers, e.g. name 'Zdroj', url '<p>eko.pdf, strana 14</p>'), made by the "
+            "service, not by the LLM. Default: 2 (= one hint)."
+        ),
+    )
 
     @model_validator(mode="after")
     def _unique_types(self) -> "QuestionOptions":

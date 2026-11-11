@@ -31,7 +31,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from qgen.contract.options import OptionDefaults
@@ -141,6 +141,22 @@ class Settings(BaseSettings):
     question_no_answer_bloom: str = Field(
         default="evaluate,create", description="Question Bloom levels allowed for no_answer."
     )
+
+    # --- Question hints (krok 13c): one hint with the source, made by code, not by the LLM ---
+    # {file} = original name of the uploaded PDF, {pages} = e.g. "14", "14 – 15" or "14, 16".
+    hint_name_sk: str = Field(default="Zdroj", min_length=1, description="Hint name, Slovak document.")
+    hint_name_en: str = Field(default="Source", min_length=1, description="Hint name, English document.")
+    hint_page_sk: str = Field(default="{file}, strana {pages}", description="One page, Slovak document.")
+    hint_pages_sk: str = Field(default="{file}, strany {pages}", description="More pages, Slovak document.")
+    hint_page_en: str = Field(default="{file}, page {pages}", description="One page, English document.")
+    hint_pages_en: str = Field(default="{file}, pages {pages}", description="More pages, English document.")
+
+    @field_validator("hint_page_sk", "hint_pages_sk", "hint_page_en", "hint_pages_en")
+    @classmethod
+    def _hint_template(cls, value: str) -> str:
+        if "{file}" not in value or "{pages}" not in value:
+            raise ValueError("hint template must contain {file} and {pages}")
+        return value
 
     # --- Option defaults ------------------------------------------------------------------
     ocr_enabled: bool = False

@@ -83,12 +83,11 @@ def analyze_item_relevance_to_lo(
 
 
 def item_to_text(item: Dict[str, Any]):
-    """Type, question, texts of the correct choices and the hints."""
+    """Type, question and texts of the correct choices (hints are only a source reference, step 13c)."""
     parts = [
         str(item.get("type", "")).strip(),
         str(item.get("description", "")).strip(),
         normalize_list_field(correct_texts(item)),
-        normalize_list_field([h.get("url", "") for h in item.get("hints") or [] if isinstance(h, dict)]),
     ]
     return " ".join(part for part in parts if part)
 

@@ -6,6 +6,8 @@ for the report (kap. 6, question_meta):
 
     id, lo_id
     name, description, type, time_to_handle, time_to_explain, hints, choices   (contract)
+                  hints: [] until the end of the pipeline, then one hint with the source
+                  (qgen.questions.hints; the LLM writes no hints, krok 13c)
     bloom_level   remember | understand | apply | analyze | evaluate | create
                   (from the LLM; missing or unknown -> the section's level)
     keywords      1-5 strings (missing -> [section title])
@@ -21,7 +23,6 @@ output step (krok 14).
 
 from __future__ import annotations
 
-import html
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -68,13 +69,6 @@ BLOOM_LABELS: dict[str, str] = {
     "create": "Vytvoriť",
 }
 
-HINT_NAMES: dict[str, dict[int, tuple[str, ...]]] = {
-    "sk": {1: ("Nápoveda",), 2: ("Ľahká nápoveda", "Ťažká nápoveda")},
-    "en": {1: ("Hint",), 2: ("Easy hint", "Hard hint")},
-}
-
-# A hint (or question) that points at the document; the student has no PDF in ECEH. Warning only.
-PAGE_REFERENCE_RE = re.compile(r"stran|strana|kapitol", re.IGNORECASE)
 # Choices that are not allowed in a choice question (error).
 FORBIDDEN_CHOICE_RE = re.compile(
     r"\b(všetky|žiadna|žiadne|ani jedna)\s+(z\s+)?(uveden|vyššie|horeuveden)|"
@@ -131,16 +125,6 @@ def bloom_labels(codes) -> list[str]:
     return labels
 
 
-def hint_names(count: int, language: str) -> tuple[str, ...]:
-    names = HINT_NAMES.get(language, HINT_NAMES["sk"])
-    if count <= 0:
-        return ()
-    if count in names:
-        return names[count]
-    base = names[2]
-    return tuple(base[i] if i < len(base) else f"{base[-1]} {i + 1}" for i in range(count))
-
-
 def clamp_times(question_type: str, handle: Any, explain: Any) -> tuple[int, int, bool]:
     """(time_to_handle, time_to_explain, changed): default when missing, clamped to the range."""
     default_handle, default_explain = DEFAULT_TIMES.get(question_type, DEFAULT_TIMES["open"])
@@ -171,17 +155,6 @@ def _as_int(value: Any) -> Optional[int]:
         except ValueError:
             return None
     return None
-
-
-def hint_html(text: str) -> str:
-    """HTML of a hint: kept when it already starts with a tag, else escaped into <p>…</p>.
-
-    Cleaning with nh3 (allowed tags only) is done by the output step.
-    """
-    text = text.strip()
-    if text.startswith("<"):
-        return text
-    return f"<p>{html.escape(text, quote=False)}</p>"
 
 
 def contract_part(item: dict) -> dict:
@@ -220,14 +193,6 @@ def normalize_generated_item(
         else:
             choices.append({"text": str(choice).strip(), "is_correct": None})
 
-    raw_hints = raw.get("hints")
-    if isinstance(raw_hints, str):
-        raw_hints = [raw_hints]
-    hint_texts = [str(h).strip() for h in (raw_hints if isinstance(raw_hints, list) else []) if str(h or "").strip()]
-    hint_texts = hint_texts[: qs.hints]
-    names = hint_names(len(hint_texts), language)
-    hints = [{"name": name, "url": hint_html(text)} for name, text in zip(names, hint_texts)]
-
     handle, explain, times_clamped = clamp_times(question_type, raw.get("time_to_handle"), raw.get("time_to_explain"))
 
     bloom = bloom_code(raw.get("bloom_level")) or section_bloom(section)
@@ -247,7 +212,7 @@ def normalize_generated_item(
         "type": question_type,
         "time_to_handle": handle,
         "time_to_explain": explain,
-        "hints": hints,
+        "hints": [],  # made from the sources after the generation (qgen.questions.hints)
         "choices": choices,
         "bloom_level": bloom,
         "keywords": keywords,
@@ -350,21 +315,3 @@ def type_rules_text(qs: QuestionSettings, settings: Settings, language: str = "s
         lines.append('- Typ "no_answer" nepoužívaj.' if sk else '- Do not use the type "no_answer".')
     return "\n".join(lines)
 
-
-def hints_rule_text(qs: QuestionSettings, language: str = "sk") -> str:
-    sk = language != "en"
-    if qs.hints <= 0:
-        return '"hints" je prázdne pole [].' if sk else '"hints" is an empty array [].'
-    if qs.hints == 1:
-        return 'Každá otázka má v "hints" presne 1 nápovedu.' if sk else 'Every question has exactly 1 hint in "hints".'
-    if qs.hints == 2:
-        return (
-            'Každá otázka má v "hints" presne 2 nápovedy: prvá ľahká (všeobecné nasmerovanie), druhá ťažká '
-            "(konkrétnejšia stopa)." if sk else
-            'Every question has exactly 2 hints in "hints": the first easy (general direction), the second hard '
-            "(a more specific clue)."
-        )
-    return (
-        f'Každá otázka má v "hints" presne {qs.hints} nápovedy od najľahšej po najťažšiu.' if sk else
-        f'Every question has exactly {qs.hints} hints in "hints", from the easiest to the hardest.'
-    )
