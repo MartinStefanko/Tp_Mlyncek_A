@@ -974,6 +974,10 @@ def filter_items_variant_b(
     min_faithfulness_score=None,
     min_answerability_score=None,
 ):
+    """Questions that pass every threshold on its own: quality score >= min_score,
+    faithfulness >= min_faithfulness_score and answerability >= min_answerability_score.
+    A missing score fails its threshold. (Before the fix the quality score and the
+    answerability were joined by OR, so a question with quality 2 and answerability 5 passed.)"""
     min_score = setting_or_default(min_score, "question_min_score")
     min_faithfulness_score = setting_or_default(min_faithfulness_score, "question_min_faithfulness_score")
     min_answerability_score = setting_or_default(min_answerability_score, "question_min_answerability_score")
@@ -994,21 +998,19 @@ def filter_items_variant_b(
         item_id = item.get("id")
         if item_id in invalid_item_ids:
             continue
-
-        faithfulness_score = faithfulness_by_id.get(item_id)
-        if faithfulness_score is None or faithfulness_score < min_faithfulness_score:
+        if not _passes(faithfulness_by_id.get(item_id), min_faithfulness_score):
             continue
-
-        score = get_item_score(item)
-        answerability_score = answerability_by_id.get(item_id)
-        score_ok = score is not None and score >= min_score
-        answerability_ok = answerability_score is not None and answerability_score >= min_answerability_score
-        if not (score_ok or answerability_ok):
+        if not _passes(get_item_score(item), min_score):
             continue
-
+        if not _passes(answerability_by_id.get(item_id), min_answerability_score):
+            continue
         accepted.append(item)
 
     return accepted
+
+
+def _passes(score, minimum) -> bool:
+    return score is not None and score >= minimum
 
 
 def normalize_accepted_items(items, valid_lo_ids):

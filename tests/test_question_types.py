@@ -487,3 +487,91 @@ def test_progress_is_well_formed_with_rounds_and_coverage():
     questions = [(d, t) for s, d, t in calls if s == "questions"]
     assert questions[0] == (0, 2 * 3)  # 2 batches x (1 + 2 rounds)
     assert len(questions) > 3
+
+
+# --- filter: every threshold on its own -----------------------------------------------------------
+
+
+def _scored(quality, answerability=5, faithfulness=5):
+    """Check answers: quality score by the question text ("[q2]" -> 2), faithfulness and
+    answerability fixed, or by "[a1]" / "[f1]" in the text."""
+
+    def score_of(block, tag, default):
+        match = re.search(rf"\[{tag}(\d)\]", block)
+        return int(match.group(1)) if match else default
+
+    def check(prompt):
+        if "Item id:" in prompt:  # quality score
+            blocks = re.split(r"(?=Item id: \d+)", prompt)
+            rows = [{"id": int(re.match(r"Item id: (\d+)", b).group(1)), "skore": score_of(b, "q", quality),
+                     "zdovodnenie": "ok"} for b in blocks if b.startswith("Item id:")]
+            return items(rows)
+        if "ITEM ID:" in prompt:  # faithfulness / answerability
+            is_answerability = "answerability" in prompt.lower()
+            rows = []
+            for b in re.split(r"(?=ITEM ID: \d+)", prompt):
+                if not b.startswith("ITEM ID:"):
+                    continue
+                item_id = int(re.match(r"ITEM ID: (\d+)", b).group(1))
+                value = score_of(b, "a", answerability) if is_answerability else score_of(b, "f", faithfulness)
+                rows.append({"item_id": item_id, "skore": value, "zdovodnenie": "ok", "choices_ok": True,
+                             "wrong_choices": []})
+            return items(rows)
+        return None
+
+    return check
+
+
+@pytest.mark.parametrize("quality, kept", [(2, False), (3, True)])
+def test_quality_score_below_the_minimum_drops_the_question(quality, kept):
+    """Quality 2 with faithfulness and answerability 5 is dropped (low_score); 3 stays."""
+    model = Model(lambda ids, prompt: items([question(1, 1), question(1, 2, description="Druhá [q5]?")]),
+                  check=_scored(quality))
+    result, diagnostics = _run(model, sections=SECTIONS[:1])
+    texts = [q["description"] for q in result.questions]
+    assert ("Otázka 1 k celku 1?" in texts) is kept
+    assert "Druhá [q5]?" in texts
+    assert diagnostics["items_dropped"]["by_reason"]["low_score"] == (0 if kept else 1)
+    assert diagnostics["items_dropped"]["total"] == (
+        diagnostics["questions_generated"] - diagnostics["questions_accepted"])
+
+
+def test_every_threshold_drops_on_its_own():
+    rows = [question(1, 1, description="Dobrá?"), question(1, 2, description="Slabá kvalita [q2]?"),
+            question(1, 3, description="Nezodpovedateľná [a2]?"), question(1, 4, description="Neverná [f2]?")]
+    model = Model(lambda ids, prompt: items(rows), check=_scored(5))
+    result, diagnostics = _run(model, sections=SECTIONS[:1])
+    assert [q["description"] for q in result.questions] == ["Dobrá?"]
+    dropped = {q["description"]: q["drop_reason"] for q in result.all_questions if q["drop_reason"]}
+    assert dropped == {"Slabá kvalita [q2]?": "low_score", "Nezodpovedateľná [a2]?": "low_score",
+                       "Neverná [f2]?": "low_score"}
+    assert diagnostics["items_dropped"]["total"] == 3 == (
+        diagnostics["questions_generated"] - diagnostics["questions_accepted"])
+
+
+def test_section_below_minimum_after_the_filter_gets_the_coverage_call():
+    calls = []
+
+    def first(ids, prompt):
+        return items([question(1, 1, description="Slabá [q2]?")])
+
+    model = Model(first, check=_scored(5))
+    original = model.__call__
+
+    def answer(prompt, model_name):
+        if is_question_generation(prompt) and "DOPLNENIE POKRYTIA" in prompt:
+            calls.append(prompt)
+            return items([question(1, 9, description="Doplnená?")])
+        return original(prompt, model_name)
+
+    result = generate_all_items(
+        SECTIONS[:1], SEGMENTS, llm=FakeLLM(default=answer), embedder=FakeEmbedder(default=OrthogonalVectors()),
+        verbose=False, document_language="sk", settings=_settings(), per_section=1,
+    )
+    diagnostics = result.reports["question_diagnostics"]
+    assert len(calls) == 1
+    assert [q["description"] for q in result.questions] == ["Doplnená?"]
+    assert diagnostics["supplementary_call"] == {"sections_missing": [1], "calls": 1, "sections_filled": [1]}
+    assert diagnostics["items_dropped"]["by_reason"]["low_score"] == 1
+    assert diagnostics["items_dropped"]["total"] == (
+        diagnostics["questions_generated"] - diagnostics["questions_accepted"])

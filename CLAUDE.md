@@ -125,6 +125,15 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   „čaká na baseline_v5“). Po nahratí v5: BASELINE_DIR → baseline_v5, AWAITING_BASELINE = None,
   aktualizovať tento dokument (referenčná nahrávka).
 
+## Oprava filtra otázok (po kroku 13c)
+- `filter_items_variant_b`: každý prah platí samostatne – skóre kvality < QGEN_QUESTION_MIN_SCORE,
+  vernosť < QGEN_QUESTION_MIN_FAITHFULNESS_SCORE alebo zodpovedateľnosť <
+  QGEN_QUESTION_MIN_ANSWERABILITY_SCORE (aj chýbajúce skóre) → vyradená, dôvod low_score.
+  Predtým bolo kvalita OR zodpovedateľnosť (variant B z pôvodného kódu), takže prechádzali otázky
+  so skóre 2 (napr. nesprávna vzorová odpoveď) aj so zodpovedateľnosťou 1. Celok pod per_section
+  po filtri dostane doplnenie pokrytia ako doteraz. Filter tematických celkov (iba vernosť) bol v poriadku.
+- baseline_v5 nameraná pred touto opravou → treba ju nahrať znova (pôvodný priečinok sa prepíše).
+
 ## Otvorené body (z kroku 13c)
 - Nahrať baseline_v5 (zmena promptov) a prepnúť na ňu replay testy.
 - docker-compose.replay.yml a tools/resilience_check.py stále používajú baseline_v4
