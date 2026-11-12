@@ -51,16 +51,18 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Cieľ generovania: čo najviac otázok, pokrytie všetkých tematických celkov.
   per_section je minimum, nie strop.
 - Replay testy (test ekvivalencie, test_cli, test_progress, replay časti workera) stoja na
-  referenčnej nahrávke baseline_v5/ (gemini-3.1-flash-lite + gemini-3.5-flash). Meraná bola
-  s commitom dff7c00 (metrics.json: git_dirty false; nápovedy z kódu, opravený filter otázok).
-  Očakávané hodnoty, modely, nastavenia otázok (metrics.json "questions" → "settings", prah
-  duplicít 0.94) aj súbežnosť (run.llm_max_concurrency 8) berie tests/baseline_data.py
-  iba z jej súborov, nie z predvolených hodnôt kódu. docker-compose.replay.yml
-  a tools/resilience_check.py používajú tiež baseline_v5. V gite je len metrics.json, bez lokálnej
-  nahrávky sa testy preskočia. Zmena promptu = nová nahrávka (tools/baseline.py), nie úprava testov.
-- baseline/ (gemini-2.5), baseline_v3/ (starý formát otázok) a baseline_v4/ (krok 13, prompty
-  s nápovedami) sú iba historické záznamy; žiadny test ich nepoužíva. Všetky štyri sú chránené
-  v tools/baseline.py.
+  referenčnej nahrávke baseline_v6/ (gemini-3.1-flash-lite + gemini-3.5-flash; kolá doplnenia
+  pokrytia). Očakávané hodnoty, modely, nastavenia otázok (metrics.json "questions" → "settings",
+  prah duplicít 0.94, question_coverage_rounds) aj súbežnosť (run.llm_max_concurrency) berie
+  tests/baseline_data.py iba z jej súborov, nie z predvolených hodnôt kódu.
+  docker-compose.replay.yml, tools/smoke_test.py a tools/resilience_check.py používajú tiež
+  baseline_v6. V gite je len metrics.json; kým nahrávka lokálne nie je, replay testy sa
+  preskočia s dôvodom „čaká na baseline_v6“. Zmena promptu = nová nahrávka (tools/baseline.py),
+  nie úprava testov.
+- baseline/ (gemini-2.5), baseline_v3/ (starý formát otázok), baseline_v4/ (krok 13, prompty
+  s nápovedami) a baseline_v5/ + baseline_v5_* (commit dff7c00, jedno volanie doplnenia pokrytia)
+  sú iba historické záznamy; žiadny test ich nepoužíva. Všetky sú chránené v tools/baseline.py
+  (spolu s baseline_v6 a baseline_v6_*).
 
 ## Požiadavky na ďalšie kroky (z kroku 8)
 - Krok 9: `delete_job` (DELETE hotovej úlohy aj mazanie po TTL) musí odstrániť aj rezerváciu
@@ -74,6 +76,9 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 ## Rozhodnutia z kroku 13 (typy otázok)
 - Všetkých 14 promptov (aj LO pipeline) vracia objekt `{"items": [...]}` (`generate_json(items_key="items")`);
   JSON režim zapnutý pri každom volaní. Iný tvar = neplatný JSON (opakovanie, potom LLMError).
+  Úprava (meranie v6: gemini-3.1-flash-lite vrátil vo vernosti 2× holé pole): opakované volanie
+  po zlom tvare dostane na konci promptu `SHAPE_CORRECTION` (qgen/llm/retry.py); ak aj ono vráti
+  neprázdne holé pole objektov, berie sa ako items. Prázdne pole a iné tvary → LLMError ako predtým.
 - Interný formát otázky = polia `Question` + metadáta (qgen/questions/types.py). Pravidlá typov sú
   iba raz: `qgen.contract.units.type_rule_errors`.
 - Kontrola `is_correct` pri choice je v kontrole vernosti (faithfulness, má text zdroja);
@@ -238,3 +243,23 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   podobnosti: priradenie ostáva, varovanie `syllabus_unmentioned_sections` pre každú takú
   hodinu (číslo, názov, „S-id (téma)“; téma = najpodobnejšia téma celku). Platí pre text aj
   zoznam od učiteľa (aj plán bez strán a id → varovanie pri každej hodine).
+
+## Kolá doplnenia pokrytia (po úprave sylabu)
+- Dôvod: na eko.pdf (sylabus, skutočné Gemini) ostali celky 15 a 19 bez otázok po jednom volaní.
+- `QGEN_QUESTION_COVERAGE_ROUNDS` (predvolene 2, 0 = vypnuté, 1 = jedno kolo ako predtým).
+  Kolo: celky s menej ako per_section prijatými otázkami. Celok s 0 otázkami má vlastné volanie
+  a ide prvý; ostatné po QGEN_QUESTION_GENERATION_BATCH_SIZE. Nové otázky idú celou cestou
+  (validácia, duplicity, hodnotenie, kontroly, filter). Ďalšie kolo iba pre celky stále pod
+  minimom; kolá končia, keď nič nechýba. Origin otázok: `coverage`, `coverage_2`, …
+- Prompt doplnenia pokrytia: pri každej existujúcej otázke „prijatá“ alebo „VYRADENÁ: dôvod“
+  (nízke skóre kvality / nevychádza z textu / nezodpovedateľná zo zdroja – podľa zlyhaných prahov
+  filtra, zle označená možnosť, duplicita, neplatný formát, nepovolený typ), hlavička
+  „(chýba: N, prijaté: M)“; dôraz na správnosť a zodpovedateľnosť iba z textu celku.
+  Dôvod v reporte ostáva `low_score`.
+- Diagnostika `supplementary_call`: rounds_configured, sections_missing, calls, sections_filled,
+  sections_still_below, rounds[] (sections, sections_without_questions, calls, questions_added,
+  sections_filled, sections_still_below). Varovania po poslednom kole: section_without_questions
+  (0 otázok) a `section_below_minimum` (1 až per_section − 1).
+- Referencia baseline_v6 + baseline_v6_single/_topics/_lessons3/_syllabus_text (`--base baseline_v6`,
+  syllabus_text pôvodný „3 hodiny: … perpetuity vynechaj“). tools/baseline.py zapisuje
+  `question_coverage_rounds` do metrics.json; `--base` nad staršou nahrávkou bez neho použije 1.

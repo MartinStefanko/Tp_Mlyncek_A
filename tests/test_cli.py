@@ -13,6 +13,7 @@ from tests.baseline_data import (
     BASELINE_DIR,
     baseline_settings,
     load_json,
+    recorded_split,
     replay_client,
     require_baseline,
 )
@@ -45,7 +46,7 @@ def _read_json(path):
 
 @pytest.fixture
 def baseline_segments_extraction(monkeypatch):
-    """Replace PDF extraction by baseline_v5/segments.json (the recording starts after extraction)."""
+    """Replace PDF extraction by baseline_v6/segments.json (the recording starts after extraction)."""
     calls = []
 
     def fake_pdfs_to_text(pdf_inputs, ocr=None, progress_callback=None, settings=None):
@@ -88,7 +89,7 @@ def test_cli_writes_results_and_reports(tmp_path, capsys, baseline_segments_extr
 
 
 def test_cli_passes_ocr_and_language(tmp_path, monkeypatch, baseline_segments_extraction):
-    require_baseline()  # the fake extraction reads baseline_v5/segments.json
+    require_baseline()  # the fake extraction reads baseline_v6/segments.json
     captured = {}
 
     def fake_run_pipeline(segments, **kwargs):
@@ -127,8 +128,9 @@ def test_cli_rejects_bad_arguments(tmp_path):
 
 
 def test_cli_split_writes_units_and_report(tmp_path, capsys, baseline_segments_extraction):
-    """--split runs the output step: units.json by topics (8 lessons on eko.pdf) and report.json;
-    the lesson titles come from a fake, the rest from the replay of baseline_v5."""
+    """--split runs the output step: units.json by topics and report.json; the lesson titles
+    come from a fake, the rest from the replay of baseline_v6. The number of lessons comes from
+    the recording baseline_v6_topics (when it exists locally), not from the code."""
     require_baseline()
     from qgen.contract import Report, UnitsResult
     from tests.fakes import TitlesLLM
@@ -142,9 +144,15 @@ def test_cli_split_writes_units_and_report(tmp_path, capsys, baseline_segments_e
     assert code == 0
     units = UnitsResult.model_validate(_read_json(out / "units.json"))
     report = Report.model_validate(_read_json(out / "report.json"))
-    assert len(units.units) == 8
+    lessons = len(units.units)
+    recorded = recorded_split("baseline_v6_topics")
+    if recorded is not None:
+        assert lessons == recorded["lessons"]
+        assert [len(u.questions) for u in units.units] == recorded["questions_per_lesson"]
+    assert lessons >= 1 and all(u.questions for u in units.units)
     assert sum(len(u.questions) for u in units.units) == len(load_json("questions.json")) == len(report.question_meta)
-    assert "8 lessons" in capsys.readouterr().out
+    assert {m.unit for m in report.question_meta} == set(range(lessons))
+    assert f"{lessons} lessons" in capsys.readouterr().out
 
 
 def test_cli_without_split_writes_no_units(tmp_path, monkeypatch):

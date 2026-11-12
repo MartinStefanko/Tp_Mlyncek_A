@@ -151,12 +151,12 @@ def test_options_reach_the_pipeline(env, ocr):
 
 
 def test_replay_eko_completed(env_factory):
-    """eko.pdf over baseline_v5: counts must match the recording."""
+    """eko.pdf over baseline_v6: counts must match the recording."""
     require_baseline()
     # models and question settings of the recording (dedup threshold 0.95, code default 0.94)
     env = env_factory(**baseline_models(), **baseline_question_settings())
     replay = replay_client()
-    # The lesson title (step 16) is not in baseline_v5: a fake answers it, the rest is
+    # The lesson title (step 16) is not in baseline_v6: a fake answers it, the rest is
     # replayed (the titles are checked by tests/output/test_split_replay.py).
     env.use(llm=TitlesLLM(replay), embedder=replay, extract=fixed_extraction(load_json("segments.json")))
     job_id = env.create({"external_ref": "eko-1"}, pdf=EKO_PDF.read_bytes(), name="eko.pdf")

@@ -14,7 +14,7 @@ quality score uses a stronger model); set it empty to inherit QGEN_LLM_MODEL. Wi
 provider than gemini, QGEN_LLM_MODEL_EVAL must be set (qgen.llm.factory.check_config).
 The gemini-2.5 models of the old baseline (baseline/) return 404 to new users; the replay
 tests pass them explicitly (tests/baseline_data.py). The reference recording on the
-current models is baseline_v5 (its models and question settings are in its
+current models is baseline_v6 (its models and question settings are in its
 metrics.json and are passed explicitly by the replay tests).
 
 Model roles (role names of qgen.llm.factory in brackets):
@@ -138,6 +138,10 @@ class Settings(BaseSettings):
     # --- Question generation (krok 13) -------------------------------------------------------
     question_extra_rounds: int = Field(
         default=1, ge=0, le=5, description="Extra generation rounds per batch; 0 = off."
+    )
+    question_coverage_rounds: int = Field(
+        default=2, ge=0, le=5,
+        description="Coverage rounds for sections below per_section after the filter; 0 = off, 1 = one round.",
     )
     question_dedup_threshold: float = Field(
         default=0.94, ge=0, le=1, description="Cosine similarity at which a question of the same section is a duplicate."

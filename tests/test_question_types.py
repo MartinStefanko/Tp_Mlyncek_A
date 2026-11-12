@@ -571,7 +571,11 @@ def test_section_below_minimum_after_the_filter_gets_the_coverage_call():
     diagnostics = result.reports["question_diagnostics"]
     assert len(calls) == 1
     assert [q["description"] for q in result.questions] == ["Doplnená?"]
-    assert diagnostics["supplementary_call"] == {"sections_missing": [1], "calls": 1, "sections_filled": [1]}
+    supplementary = diagnostics["supplementary_call"]
+    assert (supplementary["sections_missing"], supplementary["calls"], supplementary["sections_filled"],
+            supplementary["sections_still_below"]) == ([1], 1, [1], [])
+    assert [r["round"] for r in supplementary["rounds"]] == [1]  # filled in round 1: no round 2
+    assert "Slabá [q2]? — VYRADENÁ: nízke skóre kvality" in calls[0]
     assert diagnostics["items_dropped"]["by_reason"]["low_score"] == 1
     assert diagnostics["items_dropped"]["total"] == (
         diagnostics["questions_generated"] - diagnostics["questions_accepted"])

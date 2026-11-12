@@ -1,7 +1,7 @@
 """Worker tests: API (RealBackend + RqJobQueue) and RQ SimpleWorker over fakeredis.
 
 No real LLM / embedding API: FakeLLM with a scripted model, or the replay client over
-baseline_v5 (skipped when the recording is missing). PDF extraction is replaced by fixed
+baseline_v6 (skipped when the recording is missing). PDF extraction is replaced by fixed
 segments unless a test needs the real one.
 
 Webhooks: the API and the worker queue them on "qgen-webhooks" (RqWebhookNotifier);

@@ -1,5 +1,8 @@
 """Prompts of the question pipeline (krok 13): generation, extra rounds, coverage, quality score.
 
+The coverage prompt lists the existing questions with their status (accepted, or dropped and
+why), so the model knows which mistakes to avoid.
+
 Every prompt asks for a JSON object {"items": [...]} (JSON mode of every provider). The
 templates use <<name>> placeholders filled by str.replace, so the JSON braces in the text
 need no escaping. The faithfulness and answerability prompts live in their modules and use
@@ -133,7 +136,18 @@ Existing questions:
 
 COVERAGE_SK = """
 DOPLNENIE POKRYTIA:
-Tieto tematické celky majú po kontrole kvality málo otázok. Pre každý vytvor aspoň toľko nových otázok, koľko je uvedené pri celku („chýba“). Nové otázky sa líšia od uvedených. Dbaj hlavne na vecnú správnosť, jednoznačnosť a správne označenie možností.
+Tieto tematické celky majú po kontrole kvality menej otázok, ako je potrebné. Pre každý celok vytvor aspoň toľko nových otázok, koľko je uvedené pri celku („chýba“). Ak to obsah dovoľuje, vytvor aj viac, lebo aj nové otázky prejdú kontrolou.
+
+Najdôležitejšie je, aby otázka bola vecne správna a aby sa jej správna odpoveď dala jednoznačne zistiť iba z textu tematického celku. Radšej jednoduchšia otázka na pojem, definíciu, vlastnosť alebo postup, ktorý text výslovne uvádza, ako náročná otázka, ktorej odpoveď text priamo neobsahuje.
+
+Pri každej už vytvorenej otázke je uvedené, či bola prijatá alebo vyradená a prečo:
+- „nezodpovedateľná zo zdroja“: odpoveď sa z textu celku nedá jednoznačne zistiť – pýtaj sa iba na to, čo text uvádza,
+- „nevychádza z textu“: otázka alebo odpoveď obsahovala informácie, ktoré v texte nie sú,
+- „zle označená možnosť“: označenie správnej a nesprávnych možností nezodpovedalo textu – každú možnosť over oproti textu,
+- „nízke skóre kvality“: zadanie bolo nejasné alebo viacznačné, prípadne odpoveď nebola správna,
+- „duplicita“: otázka bola príliš podobná inej otázke celku,
+- „neplatný formát“ alebo „nepovolený typ“: otázka nedodržala formát výstupu alebo pravidlá typov.
+Vyhni sa chybám vyradených otázok. Vyradené ani prijaté otázky neopakuj a nepreformulúvaj.
 
 Už vytvorené otázky:
 <<existing>>
@@ -141,11 +155,44 @@ Už vytvorené otázky:
 
 COVERAGE_EN = """
 COVERAGE SUPPLEMENT:
-These sections have too few questions after the quality check. For each, create at least as many new questions as listed next to it ("missing"). The new questions differ from the listed ones. Pay most attention to factual correctness, unambiguity and correct marking of the options.
+These sections have fewer questions than needed after the quality check. For each section, create at least as many new questions as listed next to it ("missing"). If the content allows, create more, because the new questions also go through the check.
+
+Most important: each question must be factually correct, and its correct answer must be clearly found in the text of its section alone. Prefer a simpler question about a concept, definition, property or procedure that the text states explicitly over a harder question whose answer the text does not contain directly.
+
+Each existing question is marked as accepted or dropped, with the reason:
+- "not answerable from the source": the answer cannot be clearly found in the text of the section – ask only about what the text states,
+- "not supported by the text": the question or answer contained information that is not in the text,
+- "wrongly marked option": the marking of the correct and wrong options did not match the text – check every option against the text,
+- "low quality score": the question was unclear or ambiguous, or the answer was not correct,
+- "duplicate": the question was too similar to another question of the section,
+- "invalid format" or "type not allowed": the question did not follow the output format or the type rules.
+Avoid the mistakes of the dropped questions. Do not repeat or rephrase dropped or accepted questions.
 
 Existing questions:
 <<existing>>
 """
+
+# Status marks of the existing questions in the coverage prompt. Keys: "accepted", the drop
+# reasons of the pipeline, and for low_score the failed checks (quality, faithfulness,
+# answerability). Unknown keys are shown as dropped without a reason.
+STATUS_LABELS = {
+    "sk": {
+        "accepted": "prijatá", "dropped": "VYRADENÁ",
+        "quality": "nízke skóre kvality", "faithfulness": "nevychádza z textu",
+        "answerability": "nezodpovedateľná zo zdroja", "wrong_choice_marking": "zle označená možnosť",
+        "duplicate": "duplicita", "validation": "neplatný formát",
+        "type_not_allowed": "nepovolený typ", "type_rule": "nepovolený typ",
+        "accepted_count": "prijaté",
+    },
+    "en": {
+        "accepted": "accepted", "dropped": "DROPPED",
+        "quality": "low quality score", "faithfulness": "not supported by the text",
+        "answerability": "not answerable from the source", "wrong_choice_marking": "wrongly marked option",
+        "duplicate": "duplicate", "validation": "invalid format",
+        "type_not_allowed": "type not allowed", "type_rule": "type not allowed",
+        "accepted_count": "accepted",
+    },
+}
 
 # First lines of the generation prompts (qgen.llm.adapters.replay.QUESTION_PROMPT_MARKERS).
 GENERATION_MARKERS = (
@@ -169,18 +216,41 @@ def build_lo_blocks(blocks: list[dict], document_language: str = "sk") -> str:
     return "\n\n".join(parts)
 
 
-def _existing_lines(existing: dict, document_language: str, missing: dict | None = None) -> str:
-    label = "missing" if document_language == "en" else "chýba"
+def _existing_lines(existing: dict, document_language: str, missing: dict | None = None,
+                    statuses: dict | None = None) -> str:
+    """statuses (coverage prompt only): question id -> list of status keys of STATUS_LABELS
+    (["accepted"], ["duplicate"], ["quality", "answerability"], ...)."""
+    english = document_language == "en"
+    label = "missing" if english else "chýba"
+    marks = STATUS_LABELS["en" if english else "sk"]
     lines = []
     for lo_id, questions in existing.items():
         head = f"- lo_id {lo_id}"
         if missing is not None:
-            head += f" ({label}: {missing.get(lo_id, 1)})"
+            extra = ""
+            if statuses is not None:
+                accepted = sum(1 for q in questions if statuses.get(q.get("id")) == ["accepted"])
+                extra = f", {marks['accepted_count']}: {accepted}"
+            head += f" ({label}: {missing.get(lo_id, 1)}{extra})"
         lines.append(head + ":")
         for n, question in enumerate(questions, start=1):
             text = " ".join(str(question.get("description", "")).split())
-            lines.append(f"  {n}. [{question.get('type', '')}] {text}")
+            line = f"  {n}. [{question.get('type', '')}] {text}"
+            if statuses is not None:
+                line += " — " + _status_mark(statuses.get(question.get("id")) or [], marks)
+            lines.append(line)
     return "\n".join(lines)
+
+
+def _status_mark(keys: list[str], marks: dict) -> str:
+    if keys == ["accepted"]:
+        return marks["accepted"]
+    reasons = []
+    for key in keys:
+        text = marks.get(key)
+        if text and text not in reasons and key not in ("accepted", "dropped", "accepted_count"):
+            reasons.append(text)
+    return f"{marks['dropped']}: {', '.join(reasons)}" if reasons else marks["dropped"]
 
 
 def build_extra_round_section(existing: dict, document_language: str = "sk") -> str:
@@ -189,10 +259,12 @@ def build_extra_round_section(existing: dict, document_language: str = "sk") -> 
     return _fill(template, existing=_existing_lines(existing, document_language))
 
 
-def build_coverage_section(existing: dict, missing: dict, document_language: str = "sk") -> str:
-    """missing: lo_id -> number of questions still needed to reach per_section."""
+def build_coverage_section(existing: dict, missing: dict, document_language: str = "sk",
+                           statuses: dict | None = None) -> str:
+    """missing: lo_id -> number of questions still needed to reach per_section; statuses:
+    question id -> status keys (accepted or why it was dropped, see STATUS_LABELS)."""
     template = COVERAGE_EN if document_language == "en" else COVERAGE_SK
-    return _fill(template, existing=_existing_lines(existing, document_language, missing))
+    return _fill(template, existing=_existing_lines(existing, document_language, missing, statuses or {}))
 
 
 def build_item_generation_prompt(

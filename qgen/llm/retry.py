@@ -42,6 +42,13 @@ T = TypeVar("T")
 
 JSON_ATTEMPTS = 2  # first answer + one repeated call when the JSON is invalid
 
+# Appended to the prompt of the repeated call after an answer of the wrong shape (e.g.
+# gemini-3.1-flash-lite returned a bare array twice for the same faithfulness prompt).
+SHAPE_CORRECTION = (
+    '\n\nIMPORTANT: your previous answer had the wrong shape ({shape}). Return ONLY a JSON object '
+    '{{"{key}": [...]}} with the array under the key "{key}", not a bare array.\n'
+)
+
 # Replaced in tests, so retries do not really wait.
 _sleep: Callable[[float], None] = time.sleep
 
@@ -149,16 +156,20 @@ def generate_json(
     items_key="items": the prompt asks for an object {"items": [...]} (JSON mode of every
     provider returns an object). The answer must be a JSON object whose `items_key` is an
     array; that array is returned. Anything else (an array, an object without the key, a
-    key that is not an array) counts as invalid JSON: same repeated call, then
-    LLMError(invalid_json=True). It never becomes an empty result.
+    key that is not an array) counts as invalid JSON: one repeated call with SHAPE_CORRECTION
+    appended to the prompt, then LLMError(invalid_json=True). Exception: when the repeated
+    call returns again a non-empty bare array of objects, that array is taken as the items
+    (the content is there, only the wrapping object is missing). It never becomes an empty
+    result. Invalid JSON (not parseable) repeats the same prompt.
     """
     _require_settings(settings)
     model = model or factory.model_for_role(role, settings)
     last_error: Optional[json.JSONDecodeError] = None
     wrong_shape: Optional[str] = None
+    current_prompt = prompt
     for attempt in range(1, JSON_ATTEMPTS + 1):
         response = generate_text(
-            llm, prompt, role=role, model=model, settings=settings, verbose=verbose, max_tokens=max_tokens
+            llm, current_prompt, role=role, model=model, settings=settings, verbose=verbose, max_tokens=max_tokens
         )
         try:
             parsed = safe_load_json(response.text or "")
@@ -170,9 +181,14 @@ def generate_json(
         if items_key is not None:
             shape = _items_shape_error(parsed, items_key)
             if shape is not None:
+                if attempt > 1 and _is_bare_object_array(parsed):
+                    if verbose:
+                        print(f"LLM vratilo znova pole bez objektu '{items_key}' (role {role}), beriem ho ako polozky.")
+                    return parsed
                 last_error, wrong_shape = None, shape
+                current_prompt = prompt + SHAPE_CORRECTION.format(shape=shape, key=items_key)
                 if verbose and attempt < JSON_ATTEMPTS:
-                    print(f"LLM vratilo JSON zleho tvaru ({shape}, role {role}), opakujem volanie.")
+                    print(f"LLM vratilo JSON zleho tvaru ({shape}, role {role}), opakujem volanie s opravou.")
                 continue
             return parsed[items_key]
         return parsed
@@ -186,6 +202,10 @@ def generate_json(
     raise LLMError(
         message, role=role, model=model, cause=last_error, invalid_json=True, attempts=JSON_ATTEMPTS,
     )
+
+
+def _is_bare_object_array(parsed: Any) -> bool:
+    return isinstance(parsed, list) and bool(parsed) and all(isinstance(row, dict) for row in parsed)
 
 
 def _items_shape_error(parsed: Any, items_key: str) -> Optional[str]:

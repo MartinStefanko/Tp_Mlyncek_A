@@ -22,17 +22,18 @@ recording DIR (its segments.json, models and question settings from its metrics.
 only the calls of the split and output steps go to the API and into llm_calls.jsonl. Such a
 short recording works on top of DIR (replay tests join both recordings).
 
-Protected recordings: baseline_v5/ (reference of the replay tests, commit dff7c00), the
-split recordings on top of it (baseline_v5_single/, _topics/, _lessons3/, _syllabus_text/),
-baseline_v4/ (step 13, prompts with hints), baseline_v3/ (old question format) and baseline/
-(gemini-2.5), historical records. --out pointing at one of them is refused unless
+Protected recordings: baseline_v6/ (reference of the replay tests: coverage rounds), the
+split recordings on top of it (baseline_v6_single/, _topics/, _lessons3/, _syllabus_text/),
+and the historical records baseline_v5/ with baseline_v5_* (one coverage call, commit
+dff7c00), baseline_v4/ (step 13, prompts with hints), baseline_v3/ (old question format) and
+baseline/ (gemini-2.5). --out pointing at one of them is refused unless
 --force is given.
 
 Usage (from the repo root):
     venv/Scripts/python.exe tools/baseline.py tests/fixtures/eko.pdf [more.pdf ...] --out baseline_v2
         [--app-models] [--force] [--split '{"mode": "topics"}']
-    venv/Scripts/python.exe tools/baseline.py tests/fixtures/eko.pdf --base baseline_v5
-        --split '{"mode": "topics"}' --out baseline_v5_topics
+    venv/Scripts/python.exe tools/baseline.py tests/fixtures/eko.pdf --base baseline_v6
+        --split '{"mode": "topics"}' --out baseline_v6_topics --force
 
 Outputs in --out:
     llm_calls.jsonl                    recording of all LLM and embedding calls
@@ -88,13 +89,19 @@ ITEM_EVALUATION_BATCH_SIZE = 20
 LO_BATCH_SIZE = 10
 ITEM_BATCH_SIZE = 3  # sections per question generation call (QGEN_QUESTION_GENERATION_BATCH_SIZE, step 13)
 # Recordings that must not be overwritten by accident: the reference of the replay tests
-# (baseline_v5/) and the historical records (baseline_v4/, baseline_v3/, gemini-2.5 baseline/).
-# Short recordings of the split step on top of baseline_v5 (--base), references of the
-# split replay tests (tests/output/test_split_replay.py).
-SPLIT_RECORDINGS = ("baseline_v5_single", "baseline_v5_topics", "baseline_v5_lessons3", "baseline_v5_syllabus_text")
+# (baseline_v6/) and the historical records (baseline_v5/, baseline_v4/, baseline_v3/,
+# gemini-2.5 baseline/). Short recordings of the split step on top of baseline_v6 (--base),
+# references of the split replay tests (tests/output/test_split_replay.py); the ones on top
+# of baseline_v5 are historical.
+SPLIT_RECORDINGS = ("baseline_v6_single", "baseline_v6_topics", "baseline_v6_lessons3", "baseline_v6_syllabus_text")
+HISTORICAL_SPLIT_RECORDINGS = (
+    "baseline_v5_single", "baseline_v5_topics", "baseline_v5_lessons3", "baseline_v5_syllabus_text",
+)
 PROTECTED_BASELINE_DIRS = (
-    REPO_ROOT / "baseline_v5",
+    REPO_ROOT / "baseline_v6",
     *(REPO_ROOT / name for name in SPLIT_RECORDINGS),
+    REPO_ROOT / "baseline_v5",
+    *(REPO_ROOT / name for name in HISTORICAL_SPLIT_RECORDINGS),
     REPO_ROOT / "baseline_v4",
     REPO_ROOT / "baseline_v3",
     REPO_ROOT / "baseline",
@@ -179,10 +186,12 @@ def question_summary(diagnostics: dict, pipeline_settings: Settings) -> dict:
     """Summary of the new question pipeline (step 13) from question_diagnostics."""
     by_reason = (diagnostics.get("items_dropped") or {}).get("by_reason", {})
     rounds = diagnostics.get("extra_rounds") or {}
+    coverage = diagnostics.get("supplementary_call") or {}
     return {
         "settings": {
             "question_generation_batch_size": pipeline_settings.question_generation_batch_size,
             "question_extra_rounds": pipeline_settings.question_extra_rounds,
+            "question_coverage_rounds": pipeline_settings.question_coverage_rounds,
             "question_dedup_threshold": pipeline_settings.question_dedup_threshold,
             "llm_temperature": pipeline_settings.llm_temperature,
             "llm_max_output_tokens": pipeline_settings.llm_max_output_tokens,
@@ -193,6 +202,8 @@ def question_summary(diagnostics: dict, pipeline_settings: Settings) -> dict:
         "extra_rounds_run": rounds.get("rounds_run"),
         "extra_rounds": rounds.get("rounds"),
         "generation_calls": diagnostics.get("generation_calls"),
+        "coverage_rounds": coverage.get("rounds"),
+        "sections_still_below": coverage.get("sections_still_below"),
         "batch_splits": diagnostics.get("batch_splits"),
         "duplicates_removed": (diagnostics.get("duplicates_removed") or {}).get("total"),
         "wrong_choice_marking": by_reason.get("wrong_choice_marking", 0),
@@ -221,7 +232,7 @@ def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, 
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "run": run,
         "inputs": inputs,
-        # Same keys as baseline_v5/metrics.json (read by the replay tests).
+        # Same keys as baseline_v6/metrics.json (read by the replay tests).
         "models": {
             "lo_generation": pipeline_settings.llm_model_lo,
             "lo_prerequisites": pipeline_settings.llm_model_lo,
@@ -298,7 +309,8 @@ def base_settings(base_metrics: dict) -> dict:
     """Models, question settings and concurrency of a recording (its metrics.json), by Settings
     field, so the replayed pipeline runs exactly as recorded."""
     roles = base_metrics["run"]["models_by_role"]
-    recorded = base_metrics["questions"]["settings"]
+    # Recordings before the coverage rounds (baseline_v5 and older) made one coverage call.
+    recorded = {"question_coverage_rounds": 1, **base_metrics["questions"]["settings"]}
     return {
         "llm_model": roles["check"],
         "llm_model_lo": roles["lo"],
@@ -449,12 +461,13 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("pdfs", nargs="+", help="Input PDF file(s), e.g. tests/fixtures/eko.pdf")
     parser.add_argument("--out", required=True,
-                        help="Output directory, e.g. baseline_v6 (baseline/, baseline_v3/ to baseline_v5/ only with --force)")
+                        help="Output directory, e.g. baseline_v7 (protected recordings baseline/, baseline_v3/ to "
+                             "baseline_v6/ and their split recordings only with --force)")
     parser.add_argument("--app-models", action="store_true",
                         help="Use the fixed models of the former app.py (Gemini 2.5) instead of the settings.")
     parser.add_argument("--force", action="store_true",
-                        help="Allow --out to be a protected recording (baseline/, baseline_v3/ to baseline_v5/, "
-                             "baseline_v5_* split recordings).")
+                        help="Allow --out to be a protected recording (baseline/, baseline_v3/ to baseline_v6/, "
+                             "baseline_v5_* and baseline_v6_* split recordings).")
     parser.add_argument("--split", type=parse_split, default=None, metavar="JSON",
                         help="options.split as JSON; also runs the output step (units.json, report.json).")
     parser.add_argument("--base", default=None, metavar="DIR",
@@ -466,9 +479,9 @@ def main(argv=None) -> int:
 
     if is_reference_baseline(Path(args.out)) and not args.force:
         parser.error(
-            f"--out {args.out} is a protected recording (baseline_v5/ = reference of the replay tests, "
-            "baseline_v5_* = split recordings, baseline_v4/, baseline_v3/ and baseline/ = historical records); "
-            "choose another folder (e.g. baseline_v6) or add --force."
+            f"--out {args.out} is a protected recording (baseline_v6/ = reference of the replay tests, "
+            "baseline_v6_* = split recordings, baseline_v5/, baseline_v5_*, baseline_v4/, baseline_v3/ and "
+            "baseline/ = historical records); choose another folder (e.g. baseline_v7) or add --force."
         )
     if args.base is not None:
         return main_on_base(args, args.split, parser)

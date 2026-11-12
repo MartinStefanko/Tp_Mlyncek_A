@@ -1,5 +1,5 @@
 # Development only: the real service answers LLM / embedding calls from the recording
-# baseline_v5/llm_calls.jsonl (eko.pdf) instead of an API. No key, no cost, same result.
+# baseline_v6/llm_calls.jsonl (eko.pdf) instead of an API. No key, no cost, same result.
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.replay.yml up --build
 # Used by tools/resilience_check.py and tools/smoke_test.py (README). No OCR needed:
 # QGEN_INSTALL_OCR=false builds faster. The worker logs a loud
@@ -28,11 +28,12 @@ x-replay-env: &replay-env
   QGEN_LLM_MODEL_EVAL: gemini-3.5-flash
   QGEN_EMBED_MODEL: gemini-embedding-001
   QGEN_OCR_ENABLED: "false"
-  # Question settings and concurrency of baseline_v5 (metrics.json "questions" -> "settings",
+  # Question settings and concurrency of baseline_v6 (metrics.json "questions" -> "settings",
   # "run" -> "llm_max_concurrency"), fixed here so a later change of a code default or .env
   # does not break the replay.
   QGEN_QUESTION_GENERATION_BATCH_SIZE: "3"
   QGEN_QUESTION_EXTRA_ROUNDS: "1"
+  QGEN_QUESTION_COVERAGE_ROUNDS: "2"
   QGEN_QUESTION_DEDUP_THRESHOLD: "0.94"
   QGEN_LLM_TEMPERATURE: "0.2"
   QGEN_LLM_MAX_OUTPUT_TOKENS: "32768"
@@ -45,7 +46,7 @@ x-replay-env: &replay-env
 
 x-replay-volumes: &replay-volumes
   - qgen-data:/data
-  - ./baseline_v5:/replay:ro
+  - ./baseline_v6:/replay:ro
 
 services:
   api:

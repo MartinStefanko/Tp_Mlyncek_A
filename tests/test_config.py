@@ -57,6 +57,7 @@ def test_defaults(clean_env):
     assert s.question_answerable_score == 4
     # Question generation (step 13)
     assert (s.question_extra_rounds, s.question_dedup_threshold, s.question_choice_min_share) == (1, 0.94, 0.6)
+    assert s.question_coverage_rounds == 2
     assert s.practical_bloom_levels == ("apply", "analyze", "evaluate", "create")
     assert s.no_answer_bloom_levels == ("evaluate", "create")
     assert (s.llm_temperature, s.llm_max_output_tokens) == (0.2, 32768)
@@ -90,20 +91,20 @@ def test_env_example_matches_the_code_defaults(clean_env):
     defaults = Settings(_env_file=None)
     for name in ("llm_model", "llm_model_lo", "llm_model_questions", "llm_model_eval", "embed_model",
                  "lo_batch_size", "question_generation_batch_size", "question_eval_batch_size",
-                 "question_extra_rounds", "question_dedup_threshold", "question_choice_min_share",
-                 "question_practical_bloom", "question_no_answer_bloom", "llm_temperature",
+                 "question_extra_rounds", "question_coverage_rounds", "question_dedup_threshold",
+                 "question_choice_min_share", "question_practical_bloom", "question_no_answer_bloom", "llm_temperature",
                  "llm_max_output_tokens"):
         assert getattr(from_example, name) == getattr(defaults, name), name
 
 
 def test_replay_settings_keep_the_baseline_models(clean_env):
     """The replay tests do not rely on the code defaults: baseline_settings() passes the
-    models, question settings and concurrency of baseline_v5/metrics.json explicitly."""
+    models, question settings and concurrency of baseline_v6/metrics.json explicitly."""
     from tests.baseline_data import baseline_settings
 
-    metrics_path = REPO_ROOT / "baseline_v5" / "metrics.json"
+    metrics_path = REPO_ROOT / "baseline_v6" / "metrics.json"
     if not metrics_path.is_file():
-        pytest.skip("baseline_v5/metrics.json is missing")
+        pytest.skip("čaká na baseline_v6 (chýba lokálne: metrics.json)")
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     models, roles = metrics["models"], metrics["run"]["models_by_role"]
     s = baseline_settings()
@@ -116,7 +117,8 @@ def test_replay_settings_keep_the_baseline_models(clean_env):
     assert s.question_eval_batch_size == models["item_evaluation_batch_size"]
     assert s.question_generation_batch_size == models["item_batch_size"]
     recorded = metrics["questions"]["settings"]
-    for name in ("question_generation_batch_size", "question_extra_rounds", "question_dedup_threshold",
+    for name in ("question_generation_batch_size", "question_extra_rounds", "question_coverage_rounds",
+                 "question_dedup_threshold",
                  "llm_temperature", "llm_max_output_tokens"):
         assert getattr(s, name) == recorded[name], name
     assert s.llm_max_concurrency == metrics["run"]["llm_max_concurrency"]

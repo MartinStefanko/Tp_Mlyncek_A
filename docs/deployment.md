@@ -157,6 +157,7 @@ Tieto hodnoty netreba meniť. Zmena mení kvalitu výstupu a vyžaduje novú ref
 | `QGEN_QUESTION_FAITHFUL_SCORE` | `4` | Iba report: príznak „faithful“. |
 | `QGEN_QUESTION_ANSWERABLE_SCORE` | `4` | Iba report: príznak „answerable“. |
 | `QGEN_QUESTION_EXTRA_ROUNDS` | `1` | Doplňujúce kolá generovania. |
+| `QGEN_QUESTION_COVERAGE_ROUNDS` | `2` | Kolá doplnenia pokrytia pre celky pod `per_section` (0 = vypnuté). |
 | `QGEN_QUESTION_DEDUP_THRESHOLD` | `0.94` | Podobnosť, od ktorej je otázka duplicitná. |
 | `QGEN_QUESTION_CHOICE_MIN_SHARE` | `0.6` | Podiel choice otázok v prompte. |
 | `QGEN_QUESTION_PRACTICAL_BLOOM` | `apply,analyze,evaluate,create` | Úrovne celkov s praktickou úlohou. |
@@ -376,7 +377,7 @@ QGEN_LLM_MODEL_EVAL=<model>
 ### Pred ostrou prevádzkou
 
 Iný model treba overiť na slovenskom texte. Spravte novú nahrávku na eko.pdf
-(`tools/baseline.py`) a porovnajte pokrytie tém a vernosť s `baseline_v5/metrics.json`
+(`tools/baseline.py`) a porovnajte pokrytie tém a vernosť s `baseline_v6/metrics.json`
 (README, „Nahrávky“). Ak sa zmení aj embedding model, prahy treba nakalibrovať znova.
 
 ## Veľkosť obrazu s OCR a bez OCR

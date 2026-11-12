@@ -29,7 +29,7 @@ docker-compose.dev.yml
 - Lokálny vývoj nad produkčným súborom: zverejnený port, QGEN_ENV=development, host.docker.internal.
 
 docker-compose.replay.yml
-- Vývoj bez nákladov: LLM a embeddingy z nahrávky baseline_v5/ (smoke test, resilience check).
+- Vývoj bez nákladov: LLM a embeddingy z nahrávky baseline_v6/ (smoke test, resilience check).
 
 docker-compose.mock.yml
 - Mock API pre Laravel.

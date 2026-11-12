@@ -14,7 +14,7 @@ for the report (kap. 6, question_meta):
     source        cited pages, e.g. ["D1:4"]          (former citovane_zdroje)
     source_files  names of the cited PDFs              (former zdroj)
     practical     practical task (calculation, procedure)
-    origin        initial | extra_<n> | coverage
+    origin        initial | extra_<n> | coverage | coverage_<n> (coverage round n >= 2)
     evaluation    {"score": 1-5 | None, "reason": str} (quality score, former hodnotenie)
 
 Length limits of the contract (255 / 4000 / 50 / 2000) are not checked here; that is the
@@ -82,6 +82,11 @@ ORIGIN_COVERAGE = "coverage"
 
 def extra_origin(round_no: int) -> str:
     return f"extra_{round_no}"
+
+
+def coverage_origin(round_no: int) -> str:
+    """Origin of a question of coverage round `round_no` (round 1 keeps the former "coverage")."""
+    return ORIGIN_COVERAGE if round_no <= 1 else f"{ORIGIN_COVERAGE}_{round_no}"
 
 
 @dataclass(frozen=True)

@@ -15,7 +15,7 @@ Builds the image, starts the four containers (docker-compose.yml + docker-compos
     latency     GET of the status and of the result answer within 200 ms
     down        docker compose down -v (the smoke project's own volumes)
 
-Default: LLM and embeddings from the recording baseline_v5/ (replay, no key, no cost).
+Default: LLM and embeddings from the recording baseline_v6/ (replay, no key, no cost).
 --real: the real providers from .env instead (costs a few cents, eko.pdf takes ~5 min).
 
     venv/Scripts/python.exe tools/smoke_test.py                       # image with OCR
@@ -23,7 +23,7 @@ Default: LLM and embeddings from the recording baseline_v5/ (replay, no key, no 
     venv/Scripts/python.exe tools/smoke_test.py --real                # real Gemini (.env)
 
 Needs Docker, .env (may be a copy of .env.example), eko.pdf (tests/fixtures/ or
-Hlavna_cast/ucebny_material/) and, without --real, baseline_v5/llm_calls.jsonl.
+Hlavna_cast/ucebny_material/) and, without --real, baseline_v6/llm_calls.jsonl.
 Manual only (not part of pytest). Exit code 0 = every check OK, 1 = a check failed,
 2 = missing prerequisites.
 """
@@ -58,7 +58,7 @@ CONFIG_COMBINATIONS = (
     ("docker-compose.yml", "docker-compose.dev.yml", REPLAY_FILE),
     ("docker-compose.mock.yml",),
 )
-RECORDING = REPO_ROOT / "baseline_v5" / "llm_calls.jsonl"
+RECORDING = REPO_ROOT / "baseline_v6" / "llm_calls.jsonl"
 PDF_CANDIDATES = (
     REPO_ROOT / "tests" / "fixtures" / "eko.pdf",
     REPO_ROOT / "Hlavna_cast" / "ucebny_material" / "eko.pdf",

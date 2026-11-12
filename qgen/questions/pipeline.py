@@ -11,8 +11,12 @@ content of each section (tematický celok) allows.
        an answer cut off at the output token limit splits the batch in half
     3. evaluation of the kept questions: quality score (chunks of question_eval_batch_size),
        faithfulness with the check of the choice marking, answerability, filter
-    4. coverage: sections with fewer accepted questions than per_section get one more
-       call; the new questions go through 2-3 as well
+    4. coverage: up to QGEN_QUESTION_COVERAGE_ROUNDS rounds; in each round the sections with
+       fewer accepted questions than per_section get a coverage call (a section without any
+       accepted question gets its own call, first; the others QGEN_QUESTION_GENERATION_BATCH_SIZE
+       per call). The prompt lists the existing questions with their status (accepted, or
+       dropped and why). The new questions go through 2-3 as well; the next round only for
+       the sections still below the minimum, no round when nothing is missing
     5. relevance to the section (all questions), ordering, ids 1..n, hints: one hint with
        the document name and pages (qgen.questions.hints; the LLM writes no hints, step 13c)
 
@@ -67,10 +71,10 @@ from qgen.questions.prompts import (
 )
 from qgen.questions.relevance_to_lo import analyze_item_relevance_to_lo
 from qgen.questions.types import (
-    ORIGIN_COVERAGE,
     ORIGIN_INITIAL,
     QUESTION_TYPES,
     QuestionSettings,
+    coverage_origin,
     extra_origin,
     normalize_generated_item,
     normalize_sources,
@@ -130,6 +134,7 @@ STATUS_PENDING = "pending"    # kept after generation, waiting for the evaluatio
 STATUS_ACCEPTED = "accepted"
 
 WARNING_SECTION_WITHOUT_QUESTIONS = "section_without_questions"
+WARNING_SECTION_BELOW_MINIMUM = "section_below_minimum"
 WARNING_CHOICE_MARKING = "choice_marking_wrong"
 WARNING_CHOICE_SHARE = "choice_share_low"
 
@@ -196,11 +201,13 @@ def generate_items_for_batch(
     per_section: Optional[int] = None,
     existing: Optional[dict] = None,
     missing: Optional[dict] = None,
+    statuses: Optional[dict] = None,
 ) -> BatchItems:
     """One generation call for the sections of `los_batch`.
 
     existing=None: first call. existing={lo_id: [questions]}: extra round (missing=None) or
-    coverage call (missing={lo_id: count}); only the sections of this batch are listed.
+    coverage call (missing={lo_id: count}, statuses={question id: status keys}); only the
+    sections of this batch are listed.
     An answer cut off at the token limit raises LLMError with `truncated` = True.
     """
     model = setting_or_default(model, "llm_model_questions", settings)
@@ -216,7 +223,8 @@ def generate_items_for_batch(
         if missing is None:
             extra_section = build_extra_round_section(listed, document_language)
         else:
-            extra_section = build_coverage_section(listed, {i: missing.get(i, 1) for i in ids}, document_language)
+            extra_section = build_coverage_section(listed, {i: missing.get(i, 1) for i in ids}, document_language,
+                                                   statuses)
     prompt = build_item_generation_prompt(
         build_lo_blocks(blocks, document_language), document_language, qs, settings, extra_section
     )
@@ -354,7 +362,7 @@ class _QuestionRun:
 
     def __init__(self, los, segmenty, *, llm, embedder, settings, qs, language, generation_model,
                  evaluation_model, batch_size, evaluation_batch_size, max_batch_attempts, max_eval_attempts,
-                 extra_rounds, verbose, progress_callback):
+                 extra_rounds, verbose, progress_callback, coverage_rounds=1):
         self.los = los
         self.segmenty = segmenty
         self.llm = llm
@@ -369,6 +377,7 @@ class _QuestionRun:
         self.max_batch_attempts = max_batch_attempts
         self.max_eval_attempts = max_eval_attempts
         self.extra_rounds = extra_rounds
+        self.coverage_rounds = coverage_rounds
         self.verbose = verbose
         self.progress_callback = progress_callback
 
@@ -391,6 +400,12 @@ class _QuestionRun:
         self.duplicates_by_origin: Counter = Counter()
         self.rounds: list[dict] = []
         self.wrong_marking: list[dict] = []
+        # low_score questions: which checks failed (quality, faithfulness, answerability);
+        # only for the coverage prompt, the drop reason stays low_score.
+        self.low_score_parts: dict[int, list[str]] = {}
+        self.coverage_missing: list = []   # sections below the minimum before round 1
+        self.coverage_stats: list[dict] = []
+        self.coverage_calls = 0
         self.generation_seconds = 0.0
         self.evaluation_seconds = 0.0
         # Generation step only: (batch, round) of every question and of every duplicate
@@ -400,7 +415,7 @@ class _QuestionRun:
 
     # --- generation ---------------------------------------------------------------------
 
-    def call_generation(self, sections, existing=None, missing=None) -> BatchItems:
+    def call_generation(self, sections, existing=None, missing=None, statuses=None) -> BatchItems:
         """One generation call (split when cut off). Changes no state: runs in a worker thread."""
         return generate_with_split(
             sections,
@@ -414,6 +429,7 @@ class _QuestionRun:
             question_settings=self.qs,
             existing=existing,
             missing=missing,
+            statuses=statuses,
         )
 
     def record_generation(self, result: BatchItems, origin: str) -> None:
@@ -632,10 +648,104 @@ class _QuestionRun:
             min_answerability_score=self.settings.question_min_answerability_score,
         )
         accepted_ids = {item["id"] for item in accepted}
+        faithfulness_by_id = {row.get("item_id"): row.get("faithfulness_score") for row in faithfulness.get("items", [])}
+        answerability_by_id = {row.get("item_id"): row.get("answerability_score")
+                               for row in answerability.get("items", [])}
         for item in to_filter:
-            self.status[item["id"]] = STATUS_ACCEPTED if item["id"] in accepted_ids else DROP_LOW_SCORE
+            if item["id"] in accepted_ids:
+                self.status[item["id"]] = STATUS_ACCEPTED
+                continue
+            self.status[item["id"]] = DROP_LOW_SCORE
+            self.low_score_parts[item["id"]] = [
+                name for name, score, minimum in (
+                    ("quality", get_item_score(item), self.settings.question_min_score),
+                    ("faithfulness", faithfulness_by_id.get(item["id"]),
+                     self.settings.question_min_faithfulness_score),
+                    ("answerability", answerability_by_id.get(item["id"]),
+                     self.settings.question_min_answerability_score),
+                ) if not _passes(score, minimum)
+            ]
         self.evaluation_seconds += time.perf_counter() - started
         return faithfulness, answerability
+
+    def status_keys(self, items) -> dict:
+        """Question id -> status keys for the coverage prompt (prompts.STATUS_LABELS)."""
+        keys = {}
+        for item in items:
+            status = self.status.get(item["id"])
+            if status == STATUS_ACCEPTED:
+                keys[item["id"]] = ["accepted"]
+            elif status == DROP_LOW_SCORE:
+                keys[item["id"]] = list(self.low_score_parts.get(item["id"]) or ["quality"])
+            elif status:
+                keys[item["id"]] = [status]
+        return keys
+
+    def run_coverage(self, progress: _Progress) -> tuple[list[dict], list[dict]]:
+        """Step 4: up to coverage_rounds rounds for the sections below per_section.
+
+        Sections without an accepted question come first, each in its own call; the other
+        sections batch_size per call. Returns the faithfulness and answerability reports."""
+        faithfulness_reports: list[dict] = []
+        answerability_reports: list[dict] = []
+        per_section = self.qs.per_section
+        before = self.accepted_per_section()
+        self.coverage_missing = [lo.get("id") for lo in self.los if before[lo.get("id")] < per_section]
+        reserved = 1  # unit reserved for the coverage in the progress of q_evaluation
+        for round_no in range(1, self.coverage_rounds + 1):
+            accepted = self.accepted_per_section()
+            below = [lo for lo in self.los if accepted[lo.get("id")] < per_section]
+            if not below:
+                break
+            zero = [lo for lo in below if accepted[lo.get("id")] == 0]
+            partial = [lo for lo in below if accepted[lo.get("id")] > 0]
+            chunks = [[lo] for lo in zero] + _chunks(partial, self.batch_size)
+            if self.verbose:
+                print(f"\nDoplnenie pokrytia, kolo {round_no}: celky pod minimom {[lo.get('id') for lo in below]}"
+                      f", bez otázky {[lo.get('id') for lo in zero]}")
+            progress.grow(max(0, len(chunks) - reserved))
+            reserved = 0
+            started = time.perf_counter()
+            calls = []
+            for chunk in chunks:
+                existing = self.existing_for(chunk)
+                statuses = self.status_keys([q for questions in existing.values() for q in questions])
+                missing = {lo.get("id"): max(1, per_section - accepted[lo.get("id")]) for lo in chunk}
+                calls.append((chunk, existing, missing, statuses))
+            results = run_batches(
+                [lambda chunk=chunk, existing=existing, missing=missing, statuses=statuses:
+                 self.call_generation(chunk, existing=existing, missing=missing, statuses=statuses)
+                 for chunk, existing, missing, statuses in calls],
+                settings=self.settings, on_done=lambda _index, _result: progress.advance(),
+            )
+            origin = coverage_origin(round_no)
+            round_calls = 0
+            pending: list[dict] = []
+            for result in results:
+                self.record_generation(result, origin)
+                round_calls += result.calls
+                _, new = self.accept_new(result, origin)
+                pending.extend(new)
+            self.coverage_calls += round_calls
+            self.generation_seconds += time.perf_counter() - started
+            if pending:
+                progress.grow(self.evaluation_units(len(pending)))
+                faithfulness, answerability = self.evaluate(pending, progress)
+                faithfulness_reports.append(faithfulness)
+                answerability_reports.append(answerability)
+            after = self.accepted_per_section()
+            self.coverage_stats.append({
+                "round": round_no,
+                "sections": [lo.get("id") for lo in below],
+                "sections_without_questions": [lo.get("id") for lo in zero],
+                "calls": round_calls,
+                "questions_added": sum(after[lo.get("id")] - accepted[lo.get("id")] for lo in below),
+                "sections_filled": [lo.get("id") for lo in below if after[lo.get("id")] > accepted[lo.get("id")]],
+                "sections_still_below": [lo.get("id") for lo in below if after[lo.get("id")] < per_section],
+            })
+        if reserved:
+            progress.advance()  # no coverage call: the reserved unit is done
+        return faithfulness_reports, answerability_reports
 
     def accepted_per_section(self) -> Counter:
         return Counter(item["lo_id"] for item in self.items if self.status.get(item["id"]) == STATUS_ACCEPTED)
@@ -682,6 +792,7 @@ def generate_all_items(
     per_section: Optional[int] = None,
     question_options: Optional[QuestionOptions] = None,
     extra_rounds: Optional[int] = None,
+    coverage_rounds: Optional[int] = None,
 ) -> QuestionPipelineResult:
     """Question pipeline (see the module docstring).
 
@@ -689,6 +800,7 @@ def generate_all_items(
     hints); None = the defaults of Príloha A. per_section overrides its per_section.
     batch_size: sections per generation call (None = QGEN_QUESTION_GENERATION_BATCH_SIZE).
     extra_rounds: None = QGEN_QUESTION_EXTRA_ROUNDS.
+    coverage_rounds: None = QGEN_QUESTION_COVERAGE_ROUNDS (0 = no coverage call).
     document_language: None or "auto" = detect with the LLM; "sk" / "en" = use it.
     llm / embedder = None: created by qgen.llm.factory per role.
     An LLM or embedding call that fails for good raises LLMError.
@@ -699,6 +811,7 @@ def generate_all_items(
     max_batch_attempts = setting_or_default(max_batch_attempts, "question_generation_attempts", settings)
     max_eval_attempts = setting_or_default(max_eval_attempts, "question_eval_attempts", settings)
     extra_rounds = setting_or_default(extra_rounds, "question_extra_rounds", settings)
+    coverage_rounds = setting_or_default(coverage_rounds, "question_coverage_rounds", settings)
     generation_model = generation_model or model or settings.llm_model_questions
     evaluation_model = evaluation_model or model or settings.llm_model_eval
 
@@ -714,7 +827,7 @@ def generate_all_items(
         generation_model=generation_model, evaluation_model=evaluation_model, batch_size=batch_size,
         evaluation_batch_size=evaluation_batch_size, max_batch_attempts=max_batch_attempts,
         max_eval_attempts=max_eval_attempts, extra_rounds=extra_rounds, verbose=verbose,
-        progress_callback=progress_callback,
+        progress_callback=progress_callback, coverage_rounds=coverage_rounds,
     )
 
     # 2. generation with extra rounds
@@ -729,43 +842,10 @@ def generate_all_items(
     faithfulness_reports.append(faithfulness)
     answerability_reports.append(answerability)
 
-    # 4. coverage: sections below per_section after the filter
-    accepted_before = run.accepted_per_section()
-    under_minimum = [lo for lo in los if accepted_before[lo.get("id")] < qs.per_section]
-    coverage_calls = 0
-    coverage_pending: list[dict] = []
-    if under_minimum:
-        if verbose:
-            print(f"\nDoplnam otazky pre celky pod minimom: {[lo.get('id') for lo in under_minimum]}")
-        chunks = _chunks(under_minimum, batch_size)
-        progress.grow(len(chunks) - 1)
-        started = time.perf_counter()
-        calls = [
-            (chunk, run.existing_for(chunk),
-             {lo.get("id"): max(1, qs.per_section - accepted_before[lo.get("id")]) for lo in chunk})
-            for chunk in chunks
-        ]
-        results = run_batches(
-            [lambda chunk=chunk, existing=existing, missing=missing:
-             run.call_generation(chunk, existing=existing, missing=missing)
-             for chunk, existing, missing in calls],
-            settings=settings, on_done=lambda _index, _result: progress.advance(),
-        )
-        for result in results:
-            run.record_generation(result, ORIGIN_COVERAGE)
-            coverage_calls += result.calls
-            _, new = run.accept_new(result, ORIGIN_COVERAGE)
-            coverage_pending.extend(new)
-        run.generation_seconds += time.perf_counter() - started
-        if coverage_pending:
-            progress.grow(run.evaluation_units(len(coverage_pending)))
-            faithfulness, answerability = run.evaluate(coverage_pending, progress)
-            faithfulness_reports.append(faithfulness)
-            answerability_reports.append(answerability)
-    else:
-        progress.advance()
-    accepted_after = run.accepted_per_section()
-    filled = [lo.get("id") for lo in under_minimum if accepted_after[lo.get("id")] > accepted_before[lo.get("id")]]
+    # 4. coverage rounds: sections below per_section after the filter
+    coverage_faithfulness, coverage_answerability = run.run_coverage(progress)
+    faithfulness_reports.extend(coverage_faithfulness)
+    answerability_reports.extend(coverage_answerability)
 
     # 5. relevance, order, ids
     started = time.perf_counter()
@@ -794,8 +874,6 @@ def generate_all_items(
 
     diagnostics_report = build_question_diagnostics(
         los, all_items, status, normalized_items, run, qs,
-        under_minimum=[lo.get("id") for lo in under_minimum],
-        coverage_calls=coverage_calls, sections_filled=filled,
         validation_report=item_validation_report,
     )
     timing_report = {
@@ -850,10 +928,13 @@ def _types(items) -> dict:
 
 def build_question_diagnostics(
     los, all_items, status, normalized_items, run: _QuestionRun, qs: QuestionSettings, *,
-    under_minimum, coverage_calls, sections_filled, validation_report,
+    validation_report,
 ) -> dict:
     """Report question_diagnostics: dropped questions by reason, questions per section and
-    type, extra rounds, duplicates, batch splits, the coverage call and the warnings."""
+    type, extra rounds, duplicates, batch splits, the coverage rounds and the warnings.
+
+    After the last coverage round: section_without_questions (no accepted question) and
+    section_below_minimum (1 to per_section - 1 accepted questions)."""
     by_reason = Counter({reason: 0 for reason in DROP_REASONS})
     by_reason.update(run.generation_dropped)
     accepted = [item for item in all_items if status.get(item["id"]) == STATUS_ACCEPTED]
@@ -877,7 +958,7 @@ def build_question_diagnostics(
             reason = "all generated questions were dropped (validation, type rules, duplicates or score filter)"
         else:
             stage = "generation"
-            reason = run.no_content.get(lo_id) or "the model returned no question, also not in the coverage call"
+            reason = run.no_content.get(lo_id) or "the model returned no question, also not in the coverage rounds"
         bloom = lo.get("bloom_level", "")
         warnings.append({
             "code": WARNING_SECTION_WITHOUT_QUESTIONS,
@@ -887,6 +968,19 @@ def build_question_diagnostics(
             "stage": stage,
             "reason": reason,
         })
+    rounds_run = len(run.coverage_stats)
+    for lo in los:
+        lo_id = lo.get("id")
+        count = accepted_per_section[lo_id]
+        if 0 < count < qs.per_section:
+            warnings.append({
+                "code": WARNING_SECTION_BELOW_MINIMUM,
+                "message": (f"Section {lo_id} has {count} question(s), fewer than per_section {qs.per_section}, "
+                            f"after {rounds_run} coverage round(s)"),
+                "section_id": lo_id,
+                "questions": count,
+                "per_section": qs.per_section,
+            })
     for entry in run.wrong_marking:
         item = entry["item"]
         letters = ", ".join(entry["wrong_choices"]) or "?"
@@ -952,9 +1046,13 @@ def build_question_diagnostics(
         "times_clamped": run.times_clamped,
         "validation_warnings": dict(validation_report.get("warning_counts", {})),
         "supplementary_call": {
-            "sections_missing": list(under_minimum),
-            "calls": coverage_calls,
-            "sections_filled": list(sections_filled),
+            "rounds_configured": run.coverage_rounds,
+            "sections_missing": list(run.coverage_missing),
+            "calls": run.coverage_calls,
+            "sections_filled": [i for i in section_ids
+                                if any(i in stats["sections_filled"] for stats in run.coverage_stats)],
+            "sections_still_below": [i for i in section_ids if accepted_per_section[i] < qs.per_section],
+            "rounds": run.coverage_stats,
         },
         "sections_without_content": {str(k): v for k, v in run.no_content.items()},
         "items_dropped": {

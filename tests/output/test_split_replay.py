@@ -1,9 +1,9 @@
-"""Replay of the split step (step 16) on eko.pdf: pipeline from baseline_v5, split and output
-from the short recordings baseline_v5_single / _topics / _lessons3 / _syllabus_text.
+"""Replay of the split step (step 16) on eko.pdf: pipeline from baseline_v6, split and output
+from the short recordings baseline_v6_single / _topics / _lessons3 / _syllabus_text.
 
 The result (units.json) and the report (report.json, without timings) must equal the
 recording, and every recorded split call must be used. Skipped until the recordings exist
-locally (tools/baseline.py --base baseline_v5 --split ...).
+locally (tools/baseline.py --base baseline_v6 --split ...).
 """
 
 import pytest

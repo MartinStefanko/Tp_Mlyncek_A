@@ -61,7 +61,7 @@ Potrebujete Docker s Compose 2.24+. Všetky príkazy sa spúšťajú z koreňa p
 
 ### a) Bez kľúča a bez nákladov (replay)
 
-Odpovede LLM sa čítajú z lokálnej nahrávky `baseline_v5/` (funguje iba s `eko.pdf`):
+Odpovede LLM sa čítajú z lokálnej nahrávky `baseline_v6/` (funguje iba s `eko.pdf`):
 
 ```bash
 cp .env.example .env
@@ -237,7 +237,7 @@ Varovania (`warnings` v reporte) úlohu nezastavia; zoznam a texty pre učiteľa
 
 **Replay** (iba vývoj): `QGEN_LLM_PROVIDER=replay` a `QGEN_EMBED_PROVIDER=replay` odpovedajú
 z nahrávky `llm_calls.jsonl` namiesto API. Žiadny kľúč, žiadne náklady, rovnaký výsledok.
-`docker-compose.replay.yml` to nastaví spolu s modelmi a nastaveniami nahrávky `baseline_v5`.
+`docker-compose.replay.yml` to nastaví spolu s modelmi a nastaveniami nahrávky `baseline_v6`.
 Funguje iba `eko.pdf` bez OCR; iný dokument skončí `llm_error`. Worker pri štarte zapíše
 výrazné varovanie `REPLAY` a `GET /v1/info` ukáže `"replay": true`. Názvy hodín v nahrávke nie
 sú, preto výsledok má varovanie `lesson_titles_failed`. Replay je povolený iba pri
@@ -256,7 +256,7 @@ venv/Scripts/python.exe tools/smoke_test.py --install-ocr false   # menší obra
 venv/Scripts/python.exe tools/smoke_test.py --real                # skutočné Gemini z .env (stojí peniaze)
 ```
 
-Potrebuje Docker, `.env`, `eko.pdf` (`tests/fixtures/`) a bez `--real` nahrávku `baseline_v5/`.
+Potrebuje Docker, `.env`, `eko.pdf` (`tests/fixtures/`) a bez `--real` nahrávku `baseline_v6/`.
 Build s OCR trvá prvýkrát asi 3 minúty.
 
 ### Overenie odolnosti
@@ -297,10 +297,12 @@ dokumentu a ostáva lokálne. Chránené nahrávky sa dajú prepísať iba s `--
 | `baseline_v4/` | 3.1-flash-lite + 3.5-flash | Krok 13: nové typy otázok (choice / open / no_answer), prompty s nápovedami, sekvenčne: 167 otázok, 461 s. Historická, chránená. |
 | `baseline_v4_parallel/` | 3.1-flash-lite + 3.5-flash | Krok 13b: paralelné volania, `QGEN_LLM_MAX_CONCURRENCY=4`: 138 s (zrýchlenie 3,3× oproti v4). |
 | `baseline_v4_par8/` | 3.1-flash-lite + 3.5-flash | To isté so súbežnosťou 8: 141 s – ďalšie zvýšenie už nezrýchľuje (limit poskytovateľa). |
-| `baseline_v5/` | 3.1-flash-lite + 3.5-flash | **Referencia** (commit dff7c00): nápovedy z kódu, opravený filter otázok, súbežnosť 8. 42 celkov, 159 otázok, pokrytie tém 100 %, vernosť 4,93, 159 s. Používajú ju replay testy, replay compose, smoke test a resilience check. |
-| `baseline_v5_single/`, `_topics/`, `_lessons3/`, `_syllabus_text/` | – | Krátke nadstavbové nahrávky nad v5 (`--base baseline_v5 --split …`): iba volania kroku split (názvy hodín, plán sylabu) pre jednotlivé režimy. Test `tests/output/test_split_replay.py`. |
+| `baseline_v5/` | 3.1-flash-lite + 3.5-flash | Commit dff7c00: nápovedy z kódu, opravený filter otázok, súbežnosť 8, jedno volanie doplnenia pokrytia. 42 celkov, 159 otázok, pokrytie tém 100 %, vernosť 4,93, 159 s. Historická, chránená. |
+| `baseline_v5_single/`, `_topics/`, `_lessons3/`, `_syllabus_text/` | – | Nadstavbové nahrávky splitu nad v5. Historické, chránené. |
+| `baseline_v6/` | 3.1-flash-lite + 3.5-flash | **Referencia**: doplnenie pokrytia v kolách (`QGEN_QUESTION_COVERAGE_ROUNDS=2`, celky bez otázky vo vlastnom volaní, dôvody vyradenia v prompte). Používajú ju replay testy, replay compose, smoke test a resilience check. Kým nie je nahratá, replay testy sa preskočia („čaká na baseline_v6“). |
+| `baseline_v6_single/`, `_topics/`, `_lessons3/`, `_syllabus_text/` | – | Krátke nadstavbové nahrávky nad v6 (`--base baseline_v6 --split …`): iba volania kroku split (názvy hodín, plán sylabu) pre jednotlivé režimy. Test `tests/output/test_split_replay.py`. |
 
-Zmena promptu alebo modelu = nová nahrávka (`tools/baseline.py --out baseline_v6`), nie úprava testov.
+Zmena promptu alebo modelu = nová nahrávka (`tools/baseline.py --out baseline_v7`), nie úprava testov.
 
 ## Vývoj a testy
 
@@ -311,7 +313,7 @@ venv/Scripts/python.exe -m pytest                 # všetky testy (asi 1–2 min
 ```
 
 - Testy nikdy nevolajú skutočné LLM ani embedding API (falošní klienti a replay). Testy na
-  nahrávke `baseline_v5/` sa bez nej preskočia.
+  nahrávke `baseline_v6/` sa bez nej preskočia.
 - RQ worker potrebuje `fork`, preto beží iba v Dockeri (Linux). Testy používajú `SimpleWorker`
   a `fakeredis`.
 - Mimo `qgen/llm/` sa nesmie importovať knižnica výrobcu LLM (`tests/test_import_guard.py`).

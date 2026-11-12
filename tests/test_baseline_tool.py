@@ -1,5 +1,5 @@
 """tools/baseline.py: models from the settings or --app-models, start-up check, run info in
-metrics.json and protection of the recordings baseline_v5/ (reference), baseline_v4/, baseline_v3/ and baseline/
+metrics.json and protection of the recordings baseline_v6/ (reference), baseline_v5/, baseline_v4/, baseline_v3/ and baseline/
 (historical). No network, no pipeline run."""
 
 import importlib.util
@@ -59,6 +59,7 @@ def test_reference_baseline_is_detected(baseline, tmp_path):
     assert baseline.is_reference_baseline(REPO / "baseline_v3")
     assert baseline.is_reference_baseline(REPO / "baseline_v4")
     assert baseline.is_reference_baseline(REPO / "baseline_v5")
+    assert baseline.is_reference_baseline(REPO / "baseline_v6")
     assert not baseline.is_reference_baseline(REPO / "baseline_v2")
     assert not baseline.is_reference_baseline(tmp_path)
 
@@ -66,7 +67,8 @@ def test_reference_baseline_is_detected(baseline, tmp_path):
 @pytest.mark.parametrize(
     "folder",
     ["baseline", "baseline_v3", "baseline_v4", "baseline_v5", "baseline_v5_single", "baseline_v5_topics",
-     "baseline_v5_lessons3", "baseline_v5_syllabus_text"],
+     "baseline_v5_lessons3", "baseline_v5_syllabus_text", "baseline_v6", "baseline_v6_single", "baseline_v6_topics",
+     "baseline_v6_lessons3", "baseline_v6_syllabus_text"],
 )
 def test_out_protected_recording_is_refused_without_force(baseline, capsys, folder):
     with pytest.raises(SystemExit) as info:
@@ -121,7 +123,7 @@ def test_metrics_contain_the_run_info(baseline, tmp_path):
         "models_by_role": {"lo": "base", "prereq": "base", "questions": "base", "eval": "ev",
                            "check": "base", "topics": "base", "split": "base", "embed": "emb"},
     }
-    # Same keys as baseline_v5/metrics.json, with the models actually used.
+    # Same keys as baseline_v6/metrics.json, with the models actually used.
     assert metrics["models"]["lo_generation"] == "base" and metrics["models"]["item_evaluation"] == "ev"
     assert metrics["models"]["lo_batch_size"] == 10
 
@@ -131,11 +133,11 @@ def test_metrics_contain_the_run_info(baseline, tmp_path):
 
 def test_base_needs_split(baseline, tmp_path):
     with pytest.raises(SystemExit):
-        baseline.main([str(REPO / "tests" / "fixtures" / "eko.pdf"), "--base", "baseline_v5", "--out", str(tmp_path)])
+        baseline.main([str(REPO / "tests" / "fixtures" / "eko.pdf"), "--base", "baseline_v6", "--out", str(tmp_path)])
 
 
 def test_base_run_records_only_the_split_calls(baseline, monkeypatch, tmp_path):
-    """--base baseline_v5: the pipeline is replayed, only the lesson titles call the (fake)
+    """--base baseline_v6: the pipeline is replayed, only the lesson titles call the (fake)
     API and land in llm_calls.jsonl; units.json, report.json and metrics.json are written."""
     import json
 
@@ -153,10 +155,31 @@ def test_base_run_records_only_the_split_calls(baseline, monkeypatch, tmp_path):
                           "--split", '{"mode": "lessons", "lesson_count": 3}', "--out", str(out)])
     assert code == 0
     metrics = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
-    assert metrics["base"]["dir"] == "baseline_v5" and metrics["base"]["unused_base_calls"] == 0
+    assert metrics["base"]["dir"] == "baseline_v6" and metrics["base"]["unused_base_calls"] == 0
     assert metrics["split"]["options"]["lesson_count"] == 3 and metrics["split"]["lessons"] == 3
     assert metrics["llm_calls"]["by_method"] == {"generate_content": 1}
     assert len((out / "llm_calls.jsonl").read_text(encoding="utf-8").splitlines()) == 1
     units = json.loads((out / "units.json").read_text(encoding="utf-8"))
     assert [u["title"] for u in units["units"]] == ["Hodina 1 – názov", "Hodina 2 – názov", "Hodina 3 – názov"]
     assert (out / "report.json").is_file()
+
+
+def test_base_settings_of_a_recording_without_coverage_rounds(baseline):
+    """baseline_v5 and older made one coverage call; their metrics.json has no
+    question_coverage_rounds, so a replay on top of them uses 1."""
+    metrics = {
+        "run": {"models_by_role": {"lo": "a", "questions": "a", "eval": "b", "check": "a", "embed": "e"},
+                "llm_max_concurrency": 8},
+        "questions": {"settings": {"question_extra_rounds": 1}},
+    }
+    assert baseline.base_settings(metrics)["question_coverage_rounds"] == 1
+    metrics["questions"]["settings"]["question_coverage_rounds"] = 2
+    assert baseline.base_settings(metrics)["question_coverage_rounds"] == 2
+
+
+def test_question_summary_records_the_coverage_rounds(baseline):
+    diagnostics = {"supplementary_call": {"rounds": [{"round": 1, "calls": 2}], "sections_still_below": [4]}}
+    summary = baseline.question_summary(diagnostics, Settings.model_construct(question_coverage_rounds=2))
+    assert summary["settings"]["question_coverage_rounds"] == 2
+    assert summary["coverage_rounds"] == [{"round": 1, "calls": 2}]
+    assert summary["sections_still_below"] == [4]

@@ -1,0 +1,329 @@
+{
+  "created_at": "2026-11-12T13:37:36+00:00",
+  "run": {
+    "started_at": "2026-11-12T13:34:49+00:00",
+    "git_commit": "d089bb03f632af16b3d9c38a9073a20f6fead047",
+    "git_dirty": true,
+    "models_source": "settings",
+    "llm_provider": "gemini",
+    "embed_provider": "gemini",
+    "llm_max_concurrency": 4,
+    "models_by_role": {
+      "lo": "gemini-3.1-flash-lite",
+      "prereq": "gemini-3.1-flash-lite",
+      "questions": "gemini-3.1-flash-lite",
+      "eval": "gemini-3.5-flash",
+      "check": "gemini-3.1-flash-lite",
+      "topics": "gemini-3.1-flash-lite",
+      "split": "gemini-3.1-flash-lite",
+      "embed": "gemini-embedding-001"
+    }
+  },
+  "inputs": [
+    {
+      "name": "eko.pdf",
+      "sha256": "69075eae95e33be4fa3ef5938a4f7f61079477b37b623aae24c59a595ecf15e0"
+    }
+  ],
+  "models": {
+    "lo_generation": "gemini-3.1-flash-lite",
+    "lo_prerequisites": "gemini-3.1-flash-lite",
+    "item_generation": "gemini-3.1-flash-lite",
+    "item_evaluation": "gemini-3.5-flash",
+    "item_evaluation_batch_size": 20,
+    "lo_batch_size": 10,
+    "item_batch_size": 3
+  },
+  "document_language": "sk",
+  "topic_coverage": {
+    "coverage_percent": 100.0,
+    "topics_total": 9,
+    "topics_covered": 9,
+    "similarity_threshold": 0.72
+  },
+  "lo_faithfulness": {
+    "average_faithfulness_score": 5.0,
+    "los_evaluated": 42
+  },
+  "lo_relevance_to_segment": {
+    "average_similarity": 0.7996
+  },
+  "item_faithfulness": {
+    "average_faithfulness_score": 4.9375,
+    "items_evaluated": 176,
+    "faithful_items_percent": 98.3
+  },
+  "item_answerability": {
+    "average_answerability_score": 4.8182,
+    "items_evaluated": 176,
+    "answerable_items_percent": 95.45
+  },
+  "item_relevance_to_lo": {
+    "average_similarity": 0.7761
+  },
+  "counts": {
+    "pages": 69,
+    "los_all": 42,
+    "los_accepted": 42,
+    "items_all": 186,
+    "items_accepted": 166
+  },
+  "timings_seconds": {
+    "extraction": 0.6496,
+    "lo_pipeline_wall": 21.7929,
+    "lo_generation": 12.2173,
+    "lo_evaluation": 8.2328,
+    "item_pipeline_wall": 144.529,
+    "item_generation": 52.6551,
+    "item_evaluation": 90.7374,
+    "total_wall": 166.9956
+  },
+  "llm_calls": {
+    "by_method": {
+      "generate_content": 80,
+      "embed_content": 42
+    },
+    "failed": 0
+  },
+  "questions": {
+    "settings": {
+      "question_generation_batch_size": 3,
+      "question_extra_rounds": 1,
+      "question_coverage_rounds": 2,
+      "question_dedup_threshold": 0.94,
+      "llm_temperature": 0.2,
+      "llm_max_output_tokens": 32768
+    },
+    "types_generated": {
+      "choice": 131,
+      "open": 48,
+      "no_answer": 7
+    },
+    "types_accepted": {
+      "choice": 116,
+      "open": 44,
+      "no_answer": 6
+    },
+    "practical_accepted": 35,
+    "extra_rounds_run": 1,
+    "extra_rounds": [
+      {
+        "round": 1,
+        "calls": 14,
+        "sections": 42,
+        "questions_added": 48,
+        "sections_continuing": 35
+      }
+    ],
+    "generation_calls": {
+      "initial": 14,
+      "extra": 14,
+      "coverage": 2
+    },
+    "coverage_rounds": [
+      {
+        "round": 1,
+        "sections": [
+          19,
+          26
+        ],
+        "sections_without_questions": [],
+        "calls": 1,
+        "questions_added": 1,
+        "sections_filled": [
+          19
+        ],
+        "sections_still_below": [
+          26
+        ]
+      },
+      {
+        "round": 2,
+        "sections": [
+          26
+        ],
+        "sections_without_questions": [],
+        "calls": 1,
+        "questions_added": 1,
+        "sections_filled": [
+          26
+        ],
+        "sections_still_below": []
+      }
+    ],
+    "sections_still_below": [],
+    "batch_splits": 0,
+    "duplicates_removed": 10,
+    "wrong_choice_marking": 2
+  },
+  "section_diagnostics": {
+    "sections_generated": 53,
+    "sections_after_clustering": 42,
+    "sections_accepted": 42
+  },
+  "question_diagnostics": {
+    "per_section_minimum": 3,
+    "question_options": {
+      "types": [
+        "choice",
+        "open",
+        "no_answer"
+      ],
+      "per_section": 3,
+      "choice_options": 4,
+      "hints": 2
+    },
+    "sections_total": 42,
+    "questions_generated": 186,
+    "questions_accepted": 166,
+    "questions_per_section": {
+      "generated": {
+        "min": 3,
+        "avg": 4.43,
+        "max": 7
+      },
+      "accepted": {
+        "min": 3,
+        "avg": 3.95,
+        "max": 6
+      }
+    },
+    "question_types": {
+      "generated": {
+        "choice": 131,
+        "open": 48,
+        "no_answer": 7
+      },
+      "accepted": {
+        "choice": 116,
+        "open": 44,
+        "no_answer": 6
+      },
+      "practical_accepted": 35
+    },
+    "questions_by_origin": {
+      "initial": 126,
+      "extra_1": 55,
+      "coverage": 2,
+      "coverage_2": 3
+    },
+    "generation_calls": {
+      "initial": 14,
+      "extra": 14,
+      "coverage": 2
+    },
+    "extra_rounds": {
+      "configured": 1,
+      "rounds_run": 1,
+      "rounds": [
+        {
+          "round": 1,
+          "calls": 14,
+          "sections": 42,
+          "questions_added": 48,
+          "sections_continuing": 35
+        }
+      ]
+    },
+    "batch_splits": 0,
+    "dedup_threshold": 0.94,
+    "duplicates_removed": {
+      "total": 10,
+      "by_origin": {
+        "extra_1": 7,
+        "initial": 1,
+        "coverage_2": 2
+      }
+    },
+    "wrong_choice_marking": 2,
+    "times_clamped": 0,
+    "validation_warnings": {},
+    "supplementary_call": {
+      "rounds_configured": 2,
+      "sections_missing": [
+        19,
+        26
+      ],
+      "calls": 2,
+      "sections_filled": [
+        19,
+        26
+      ],
+      "sections_still_below": [],
+      "rounds": [
+        {
+          "round": 1,
+          "sections": [
+            19,
+            26
+          ],
+          "sections_without_questions": [],
+          "calls": 1,
+          "questions_added": 1,
+          "sections_filled": [
+            19
+          ],
+          "sections_still_below": [
+            26
+          ]
+        },
+        {
+          "round": 2,
+          "sections": [
+            26
+          ],
+          "sections_without_questions": [],
+          "calls": 1,
+          "questions_added": 1,
+          "sections_filled": [
+            26
+          ],
+          "sections_still_below": []
+        }
+      ]
+    },
+    "items_dropped": {
+      "total": 20,
+      "by_reason": {
+        "missing_lo_id": 0,
+        "invalid_item_shape": 0,
+        "validation": 0,
+        "type_not_allowed": 0,
+        "type_rule": 0,
+        "duplicate": 10,
+        "low_score": 8,
+        "wrong_choice_marking": 2,
+        "unknown_lo_id": 0
+      }
+    },
+    "warnings": [
+      {
+        "code": "choice_marking_wrong",
+        "message": "Question 1 (section 1) dropped: option(s) C marked wrongly",
+        "section_id": 1,
+        "question_id": 1
+      },
+      {
+        "code": "choice_marking_wrong",
+        "message": "Question 114 (section 26) dropped: option(s) A marked wrongly",
+        "section_id": 26,
+        "question_id": 114
+      },
+      {
+        "code": "choice_share_low",
+        "message": "9 section(s) have less than 60 % choice questions: [6, 8, 12, 13, 24, 26, 27, 32, 41]",
+        "section_ids": [
+          6,
+          8,
+          12,
+          13,
+          24,
+          26,
+          27,
+          32,
+          41
+        ]
+      }
+    ]
+  }
+}
