@@ -2,7 +2,7 @@ import importlib.util
 import os
 import threading
 
-import fitz
+import pymupdf
 import numpy as np
 from pypdf import PdfReader
 
@@ -60,7 +60,7 @@ def ocr_image(img_bytes):
 
 def pdf_to_text(pdf_cesta: str, source_id=None, source_name=None, ocr=False, on_page=None):
     reader_pdf = PdfReader(pdf_cesta)
-    doc_fitz = fitz.open(pdf_cesta) if ocr else None
+    doc_fitz = pymupdf.open(pdf_cesta) if ocr else None
     source_name = source_name or os.path.basename(pdf_cesta)
 
     segmenty = []

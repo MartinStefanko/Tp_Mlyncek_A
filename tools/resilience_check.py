@@ -1,6 +1,6 @@
 """Resilience check of the real service in Docker (kap. 9: Test odolnosti, Test 202, Test mazania).
 
-Starts docker-compose.dev.yml + docker-compose.replay.yml (LLM and embeddings from the
+Starts docker-compose.yml + dev + replay overrides (LLM and embeddings from the
 recording baseline_v5/, no API key, no cost), receives the webhooks in this process
 (tools/webhook_receiver.py, signature checked) and goes through the scenarios over the
 HTTP API and `docker compose`:
@@ -51,7 +51,7 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 from webhook_receiver import make_server  # noqa: E402
 
-COMPOSE_FILES = ("docker-compose.dev.yml", "docker-compose.replay.yml")
+COMPOSE_FILES = ("docker-compose.yml", "docker-compose.dev.yml", "docker-compose.replay.yml")
 RECORDING = REPO_ROOT / "baseline_v5" / "llm_calls.jsonl"
 PDF_CANDIDATES = (
     REPO_ROOT / "tests" / "fixtures" / "eko.pdf",

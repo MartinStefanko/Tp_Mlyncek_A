@@ -3,5 +3,5 @@
 -r requirements-service.txt
 -r requirements-ocr.txt
 # tests only
-pytest
-fakeredis
+pytest==9.2.0
+fakeredis==2.40.0

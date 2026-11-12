@@ -56,6 +56,13 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
+    # --- Environment (step 17) -------------------------------------------------------
+    # production: the service does not start without QGEN_API_KEYS, or with webhooks on and
+    # without QGEN_WEBHOOK_SECRET (service.startup); development: only a warning.
+    env: Literal["production", "development"] = Field(
+        default="production", description="production = start-up security check refuses; development = warns."
+    )
+
     # --- LLM -----------------------------------------------------------------------
     llm_provider: LlmProvider = "gemini"
     llm_base_url: Optional[str] = Field(default=None, description="openai_compatible: server address.")

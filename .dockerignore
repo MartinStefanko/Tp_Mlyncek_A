@@ -1,12 +1,8 @@
-venv/
-.git/
-**/__pycache__/
-*.pyc
-.env
-docs/
-baseline/
-Hlavna_cast/
-tests/
-scripts/
-vystup/
-*.pdf
+# Whitelist: only the code and the requirements go into the build context (Dockerfile and
+# Dockerfile.mock). No .env, no recordings (baseline*/ contain document text), no PDFs.
+*
+!qgen/
+!service/
+!requirements-*.txt
+**/__pycache__
+**/*.pyc

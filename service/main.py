@@ -16,6 +16,7 @@ from service.backend import JobBackend
 from service.errors import install_error_handlers
 from service.routes import health, jobs
 from service.settings import ServiceSettings
+from service.startup import check_service_config
 from service.webhooks.asyncio_dispatcher import AsyncioWebhookDispatcher
 
 logger = logging.getLogger("qgen.api")
@@ -140,5 +141,7 @@ def __getattr__(name: str) -> FastAPI:
         raise AttributeError(name)
     if _default_app is None:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-        _default_app = create_app()
+        settings = ServiceSettings()
+        check_service_config(settings, "api")  # QGEN_ENV=production: no start without a key / secret
+        _default_app = create_app(settings)
     return _default_app

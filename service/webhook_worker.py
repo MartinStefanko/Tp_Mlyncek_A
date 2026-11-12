@@ -14,6 +14,7 @@ from typing import Optional
 
 from service.jobs.rq_queue import rq_worker_options
 from service.settings import ServiceSettings
+from service.startup import StartupConfigError, check_service_config
 from service.webhooks import rq_delivery
 
 logger = logging.getLogger("qgen.webhooks")
@@ -22,10 +23,12 @@ logger = logging.getLogger("qgen.webhooks")
 def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = ServiceSettings()
+    try:
+        check_service_config(settings, "webhook worker")  # empty secret with webhooks on
+    except StartupConfigError:
+        return 1
     if not settings.allowed_webhook_hosts:
-        logger.warning("QGEN_WEBHOOK_ALLOWED_HOSTS is empty: every webhook will be refused")
-    elif not settings.webhook_secret.get_secret_value():
-        logger.warning("QGEN_WEBHOOK_SECRET is empty: webhooks are signed with an empty key")
+        logger.info("QGEN_WEBHOOK_ALLOWED_HOSTS is empty: webhooks are off, nothing to deliver")
 
     import redis
     from rq import Worker

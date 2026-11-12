@@ -1,0 +1,14 @@
+# Variant: ECEH (Laravel) runs on ANOTHER server, so there is no shared Docker network.
+#   docker compose -f docker-compose.yml -f docker-compose.remote.yml up -d --build
+# The API port is published on QGEN_API_BIND:QGEN_API_PORT (default 0.0.0.0:8000). Allow it in
+# the firewall (or a reverse proxy with TLS) ONLY for the ECEH server (docs/deployment.md).
+# Laravel calls http://<this server>:8000; callback_url points to the ECEH server and its host
+# must be in QGEN_WEBHOOK_ALLOWED_HOSTS.
+services:
+  api:
+    ports: ["${QGEN_API_BIND:-0.0.0.0}:${QGEN_API_PORT:-8000}:8000"]
+
+networks:
+  eceh:
+    external: false
+    name: ${QGEN_REMOTE_NETWORK:-qgen-eceh-local}   # local stand-in, nobody else joins it

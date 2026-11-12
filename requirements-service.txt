@@ -1,17 +1,23 @@
-# Real service without OCR (Dockerfile, INSTALL_OCR=false): API + worker + pipeline.
-# OCR packages are in requirements-ocr.txt.
+# Real service (Dockerfile): API + worker + webhook worker + pipeline. Pinned versions.
+# OCR packages are in requirements-ocr.txt (image with INSTALL_OCR=true, the default).
 -r requirements-mock.txt
-python-dotenv
-google-genai
-openai
-anthropic
-pypdf
-pymupdf
-numpy
-scikit-learn
-filelock
+# .env for pydantic-settings and tools/webhook_receiver.py
+python-dotenv==1.2.4
+# LLM / embedding providers (imported only in qgen/llm/adapters/)
+google-genai==2.34.0
+openai==3.45.0
+anthropic==2.4.0
+# PDF
+pypdf==6.21.4
+pymupdf==2.1
+# pipeline
+numpy==2.5.4
+scikit-learn==1.9.1
+filelock==4.2.7
+# queue
 redis==8.1.0
 rq==3.0.0
+# HTML of hints
 nh3==0.3.7
 # check of the output before saving (qgen.output.check, step 14)
 jsonschema==4.26.0

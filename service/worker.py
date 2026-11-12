@@ -3,7 +3,9 @@
     python -m service.worker
 
 Start (kap. 3):
-    1. check_config – a missing key / base_url stops the start (exit code 1)
+    1. check_config – a missing key / base_url stops the start (exit code 1);
+       check_service_config – QGEN_ENV=production without QGEN_API_KEYS (or with webhooks
+       on and without QGEN_WEBHOOK_SECRET) stops the start too (service.startup)
     2. recovery: queued / running jobs that are not in the queue are queued again
     3. the periodic maintenance (cleanup + recovery) is scheduled
     4. RQ worker with the built-in scheduler (--with-scheduler: maintenance); RQ's own
@@ -25,6 +27,7 @@ from qgen.llm.factory import check_config
 from service.jobs import tasks
 from service.jobs.rq_queue import rq_worker_options
 from service.settings import ServiceSettings
+from service.startup import StartupConfigError, check_service_config
 
 logger = logging.getLogger("qgen.worker")
 
@@ -36,6 +39,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         check_config(settings)
     except LLMConfigError as exc:
         logger.error("worker not started, configuration error: %s", exc)
+        return 1
+    try:
+        check_service_config(settings, "worker")
+    except StartupConfigError:
         return 1
 
     import redis

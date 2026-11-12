@@ -1,57 +1,25 @@
-# Real service for local testing: Redis + API + worker + webhook-worker, shared volume /data.
+# Local development on top of the production file (the same services, volumes and healthchecks):
 #   cp .env.example .env      # fill in GEMINI_API_KEY (or another provider)
-#   docker compose -f docker-compose.dev.yml up --build
-# API: http://localhost:8000, documentation: http://localhost:8000/docs
-# Without OCR (INSTALL_OCR=false); the full image with OCR is step 17.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+# API: http://localhost:8000 (QGEN_API_PORT), documentation: http://localhost:8000/docs
+# Faster build without OCR: QGEN_INSTALL_OCR=false in .env.
+# QGEN_ENV=development: a missing QGEN_API_KEYS / QGEN_WEBHOOK_SECRET is only a warning.
 # Webhooks to the host (tools/webhook_receiver.py): callback_url http://host.docker.internal:9000/webhook,
 # QGEN_WEBHOOK_ALLOWED_HOSTS=host.docker.internal (README, "Webhooky").
-x-qgen: &qgen
-  build:
-    context: .
-    dockerfile: Dockerfile
-    args:
-      INSTALL_OCR: "false"
-  image: qgen:dev
-  env_file: .env
+x-dev: &dev
   environment:
-    QGEN_BACKEND: real
-    QGEN_DATA_DIR: /data
-    QGEN_REDIS_URL: redis://redis:6379/0
-  volumes:
-    - qgen-data:/data
+    QGEN_ENV: development
   extra_hosts:
     - "host.docker.internal:host-gateway"   # Linux; Docker Desktop has it built in
-  depends_on:
-    redis:
-      condition: service_healthy
-  restart: unless-stopped
 
 services:
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
   api:
-    <<: *qgen
-    ports: ["8000:8000"]
+    <<: *dev
+    ports: ["${QGEN_API_PORT:-8000}:8000"]
+  worker: *dev
+  webhook-worker: *dev
 
-  worker:
-    <<: *qgen
-    command: ["python", "-m", "service.worker"]
-
-  # Delivers webhooks (queue "qgen-webhooks") and plans their retries; never waits for a job.
-  webhook-worker:
-    <<: *qgen
-    command: ["python", "-m", "service.webhook_worker"]
-
-volumes:
-  qgen-data:
-  redis-data:
+networks:
+  eceh:
+    external: false
+    name: ${QGEN_DEV_NETWORK:-qgen-eceh-dev}   # no ECEH network on a developer machine

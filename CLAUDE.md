@@ -20,7 +20,8 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   (`status` ok/degraded, `webhook_worker` "disabled" pri vypnutých webhookoch).
 - Čistenie HTML knižnicou `nh3`.
 - Replay poskytovateľ (krok 12): `QGEN_LLM_PROVIDER/QGEN_EMBED_PROVIDER=replay` iba na vývoj;
-  check_config ho neodmieta, ale vždy varuje (bez QGEN_ENV); /v1/info ukazuje poskytovateľov
+  check_config ho neodmieta, ale vždy varuje; pri QGEN_ENV=production ho odmietne
+  service.startup.check_service_config (krok 17); /v1/info ukazuje poskytovateľov
   a `models.replay`. `QGEN_MAINTENANCE_INTERVAL_S` (predvolene 600) skracuje údržbu pre dev
   (replay compose 15 s), inak by úloha zabitého workera čakala na obnovu až 10 min. Podľa neho
   sa nastaví aj `maintenance_interval` a `worker_ttl` RQ (`rq_worker_options`; pri 600 s
@@ -204,3 +205,24 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   no_document_topics, empty_lesson, no_questions, syllabus_unknown_section,
   syllabus_duplicate_section, syllabus_skipped_sections, syllabus_fallback, syllabus_plan_invalid,
   syllabus_lesson_minutes_ignored, lesson_titles_failed.
+
+## Rozhodnutia z kroku 17 (Docker, odovzdanie)
+- `docker-compose.yml` je produkčný (projekt `qgen`): expose bez ports, siete `qgen` + externá
+  `eceh` (`QGEN_ECEH_NETWORK`, alias api `qgen-api`), worker iba v `qgen`, api a webhook-worker aj
+  v `eceh`. dev, replay a remote sú override súbory NAD ním (`-f docker-compose.yml -f …`), nie
+  samostatné kópie; mock ostáva samostatný (iný image). Compose ≥ 2.24.
+- Dockerfile: `INSTALL_OCR=true` predvolene (`QGEN_INSTALL_OCR`), torch/torchvision z CPU indexu
+  vo verziách z requirements-ocr.txt, opencv-python-headless, modely EasyOCR pri builde do
+  `/models` cez `EASYOCR_MODULE_PATH` (kód OCR sa nemení). `.dockerignore` je whitelist.
+  Veľkosť: s OCR 2,8 GB (701 MB komprimovaný), bez OCR 1,05 GB (259 MB).
+- `QGEN_ENV=production|development` (predvolene production): `service.startup.check_service_config`
+  vo vstupných bodoch (service.main:app, worker, webhook_worker; nie v `create_app`) odmietne štart
+  bez `QGEN_API_KEYS` a pri zapnutých webhookoch bez `QGEN_WEBHOOK_SECRET`; development iba varuje.
+  dev/replay/mock compose nastavia development. Production odmietne aj `QGEN_LLM_PROVIDER` alebo
+  `QGEN_EMBED_PROVIDER` = replay (development replay povolí; check_config naďalej hlasno varuje).
+- Healthchecky: `python -m service.healthcheck api|worker|webhook-worker` (worker = živý RQ worker
+  fronty s hostname tohto kontajnera).
+- `import pymupdf` namiesto `fitz`; requirements s pevnými verziami (test_docs).
+- Historické metrics.json (baseline_v2, _v4_parallel, _v4_par8) ostávajú v gite (dôkazy pre prácu).
+- `tools/smoke_test.py` (projekt `qgen-smoke`, port 18000, replay, `--real` iba ručne).
+- Success metric ±20 % dĺžky hodiny neplatí (variant A z kroku 16: kapacita hodiny neexistuje).

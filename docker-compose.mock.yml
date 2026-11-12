@@ -1,12 +1,25 @@
-# Mock API for the ECEH backend (Laravel).
+# Mock API for the ECEH backend (Laravel): the same endpoints and formats as the real
+# service (docker-compose.yml), simulated jobs and a fixed result. No LLM, no Redis.
 #   cp .env.example .env      # then edit
 #   docker compose -f docker-compose.mock.yml up --build
-# API: http://localhost:8000, documentation: http://localhost:8000/docs
+# API: http://localhost:8000 (QGEN_API_PORT), documentation: http://localhost:8000/docs
+# Moving to the real service: docs/integration.md.
+name: qgen-mock
+
 services:
   api-mock:
     build:
       context: .
       dockerfile: Dockerfile.mock
-    ports: ["8000:8000"]
+    image: qgen-mock:latest
+    ports: ["${QGEN_API_PORT:-8000}:8000"]
     env_file: .env
+    environment:
+      QGEN_BACKEND: mock
+      QGEN_ENV: development
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

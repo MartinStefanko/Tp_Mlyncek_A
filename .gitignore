@@ -22,6 +22,9 @@ vystup/
 Hlavna_cast/ucebny_material/
 *.pdf
 
+# Specification PDFs (internal documents; the repository is public). Only docs/*.md are versioned.
+docs/*.pdf
+
 # Temp files
 *.tmp
 

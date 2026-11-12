@@ -1,8 +1,10 @@
 # Development only: the real service answers LLM / embedding calls from the recording
 # baseline_v5/llm_calls.jsonl (eko.pdf) instead of an API. No key, no cost, same result.
-#   docker compose -f docker-compose.dev.yml -f docker-compose.replay.yml up --build
-# Used by tools/resilience_check.py (README, "Overenie odolnosti"). The worker logs a loud
-# REPLAY warning at start and /v1/info shows "replay": true. NEVER in production.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.replay.yml up --build
+# Used by tools/resilience_check.py and tools/smoke_test.py (README). No OCR needed:
+# QGEN_INSTALL_OCR=false builds faster. The worker logs a loud
+# REPLAY warning at start and /v1/info shows "replay": true. NEVER in production
+# (QGEN_ENV=production refuses replay; this file sets development).
 #
 # Only a job with eko.pdf (without OCR) matches the recording; another document fails
 # with llm_error ("call is not in the recording").
@@ -11,6 +13,7 @@
 #   QGEN_LLM_REPLAY_FAIL          1 = question generation fails (llm_error), to test retry
 #   QGEN_MAINTENANCE_INTERVAL_S   maintenance (cleanup + recovery); 15 s here, 600 s by default
 x-replay-env: &replay-env
+  QGEN_ENV: development
   QGEN_LLM_PROVIDER: replay
   QGEN_EMBED_PROVIDER: replay
   QGEN_LLM_REPLAY_PATH: /replay/llm_calls.jsonl

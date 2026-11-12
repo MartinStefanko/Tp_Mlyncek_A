@@ -1,0 +1,131 @@
+# QGen service in production (Príloha D): api, worker, webhook-worker, redis.
+#   cp .env.example .env          # fill in (docs/deployment.md)
+#   docker compose up -d --build
+# The Docker network of ECEH (QGEN_ECEH_NETWORK, default "eceh") must exist; Laravel calls
+# the API at http://qgen-api:8000. The port is not published (expose only).
+#
+# Variants (override files, the same services):
+#   ECEH on another server:  docker compose -f docker-compose.yml -f docker-compose.remote.yml up -d --build
+#                            (published port for the ECEH server only, docs/deployment.md)
+#   local development:       docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#   recording, no LLM costs: ... -f docker-compose.dev.yml -f docker-compose.replay.yml
+#   local model (GPU):       docker compose --profile local-llm up -d
+name: qgen
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-qgen: &qgen
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      INSTALL_OCR: ${QGEN_INSTALL_OCR:-true}
+  image: qgen:latest
+  env_file: .env
+  environment:
+    QGEN_BACKEND: real
+    QGEN_DATA_DIR: /data
+    QGEN_REDIS_URL: redis://redis:6379/0
+  volumes:
+    - qgen-data:/data
+  depends_on:
+    redis:
+      condition: service_healthy
+  networks: [qgen]
+  restart: unless-stopped
+  logging: *logging
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    # Queue and progress survive a restart (written once per second); job.json is the source of truth.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks: [qgen]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    logging: *logging
+
+  api:
+    <<: *qgen
+    expose: ["8000"]                     # internal networks only, no published port
+    # ECEH on another server: do not uncomment here, use docker-compose.remote.yml
+    # ports: ["${QGEN_API_BIND:-127.0.0.1}:${QGEN_API_PORT:-8000}:8000"]
+    networks:
+      qgen: {}
+      eceh:
+        aliases: [qgen-api]              # Laravel: http://qgen-api:8000
+    healthcheck:
+      test: ["CMD", "python", "-m", "service.healthcheck", "api"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Runs the pipeline (RQ worker with the built-in scheduler: maintenance, TTL cleanup, recovery).
+  worker:
+    <<: *qgen
+    command: ["python", "-m", "service.worker"]
+    deploy:
+      replicas: ${QGEN_WORKERS:-1}
+    healthcheck:
+      test: ["CMD", "python", "-m", "service.healthcheck", "worker"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Delivers webhooks to Laravel (queue "qgen-webhooks") and plans their retries; never
+  # waits for a running job. 4th container (CLAUDE.md, step 11).
+  webhook-worker:
+    <<: *qgen
+    command: ["python", "-m", "service.webhook_worker"]
+    networks: [qgen, eceh]
+    healthcheck:
+      test: ["CMD", "python", "-m", "service.healthcheck", "webhook-worker"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Optional local model with an OpenAI-compatible API (profile local-llm, GPU).
+  # Then QGEN_LLM_PROVIDER=openai_compatible, QGEN_LLM_BASE_URL=http://llm:8001/v1,
+  # QGEN_LLM_MODEL=QGEN_LLM_MODEL_EVAL=<QGEN_LOCAL_MODEL>. A model on a separate GPU server
+  # needs no container here: only QGEN_LLM_BASE_URL (docs/deployment.md).
+  llm:
+    profiles: [local-llm]
+    image: ${QGEN_VLLM_IMAGE:-vllm/vllm-openai:v0.11.0}
+    command: ["--model", "${QGEN_LOCAL_MODEL:-}", "--served-model-name", "${QGEN_LOCAL_MODEL:-}", "--port", "8001"]
+    ipc: host
+    volumes:
+      - models:/root/.cache/huggingface
+    networks: [qgen]
+    restart: unless-stopped
+    logging: *logging
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  qgen: {}
+  eceh:
+    external: true
+    name: ${QGEN_ECEH_NETWORK:-eceh}     # network shared with Laravel (name from the ECEH deployment)
+
+volumes:
+  qgen-data: {}                          # job.json, PDF, results: back up
+  redis-data: {}                         # queue only; may be lost (worker restores jobs from job.json)
+  models: {}                             # Hugging Face cache of the llm container

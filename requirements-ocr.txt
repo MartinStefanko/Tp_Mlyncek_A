@@ -1,5 +1,9 @@
 # OCR of images in the PDF (options.extraction.ocr / QGEN_OCR_ENABLED). Large (torch).
-easyocr
-torch
-torchvision
-opencv-python
+# The Dockerfile installs torch and torchvision with these versions from the CPU index
+# (https://download.pytorch.org/whl/cpu), then this file; the EasyOCR models are
+# downloaded at build time.
+torch==2.15.0
+torchvision==0.29.2
+easyocr==1.7.2
+# without GUI libraries (no libGL in the image); easyocr needs only the headless variant
+opencv-python-headless==5.0.0.93

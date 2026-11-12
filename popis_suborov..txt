@@ -1,96 +1,169 @@
-Tento súbor popisuje pôvodnú Streamlit verziu (Hlavna_cast/) a aktualizuje sa v poslednom kroku prerábky.
+Popis súborov projektu QGen (Mlynček A) – stav po kroku 17 (služba v Dockeri).
+Pôvodná Streamlit verzia (Hlavna_cast/) už nie je súčasťou repozitára; jej moduly sú
+presunuté do qgen/. Prehľad služby a návody: README.md, docs/deployment.md, docs/integration.md.
 
-Popis súborov projektu
 
+Koreň projektu
 
-.env
-- Lokálny konfiguračný súbor s API kľúčom pre Gemini. Je potrebné ho manuálne vytvoriť.
+.env.example
+- Vzor konfigurácie so všetkými premennými a komentármi. Skopíruje sa do .env (nie je v gite).
+
+Dockerfile
+- Obraz služby (api, worker, webhook-worker). ARG INSTALL_OCR (predvolene true): torch pre CPU,
+  EasyOCR a jeho modely stiahnuté pri builde. Beží pod používateľom bez root práv, HEALTHCHECK.
+
+Dockerfile.mock
+- Malý obraz mock API pre vývoj integrácie v Laraveli (bez pipeline a LLM).
+
+.dockerignore
+- Whitelist: do buildu ide iba qgen/, service/ a requirements (žiadne tajomstvá ani nahrávky).
+
+docker-compose.yml
+- Produkčné nasadenie: api, worker, webhook-worker, redis, volumes, sieť qgen a externá sieť ECEH,
+  healthchecky, voliteľný profil local-llm (vLLM).
+
+docker-compose.remote.yml
+- Variant, keď ECEH beží na inom serveri: zverejnený port API pre server ECEH.
+
+docker-compose.dev.yml
+- Lokálny vývoj nad produkčným súborom: zverejnený port, QGEN_ENV=development, host.docker.internal.
+
+docker-compose.replay.yml
+- Vývoj bez nákladov: LLM a embeddingy z nahrávky baseline_v5/ (smoke test, resilience check).
+
+docker-compose.mock.yml
+- Mock API pre Laravel.
+
+requirements-mock.txt, requirements-service.txt, requirements-ocr.txt, requirements.txt
+- Závislosti s pevnými verziami: mock API; služba bez OCR; OCR (torch, EasyOCR, opencv headless);
+  lokálny vývoj (všetko + pytest, fakeredis).
+
+pytest.ini
+- Nastavenie testov.
+
+CLAUDE.md
+- Pravidlá a rozhodnutia prerábky (zdroj rozhodnutí nad rámec špecifikácie).
 
 README.md
-- Dokumentácia projektu. Popisuje inštaláciu, nastavenie API kľúča, spustenie cez Streamlit a použitie aplikácie.
+- Čo služba robí, rýchly štart, režimy rozdelenia do hodín, príklady volaní, webhooky, chyby,
+  replay, smoke test, overenie odolnosti, nahrávky, vývoj a testy.
 
-requirements.txt
-- Zoznam Python knižníc potrebných na spustenie aplikácie, napríklad Streamlit, Google GenAI, OCR, spracovanie PDF, grafy a export do PDF.
-
-venv/
-- Virtuálne Python prostredie s lokálne nainštalovanými knižnicami projektu. Vytvorí sa pri inštalácii projektu.
-
-Hlavna_cast/
-- Hlavný priečinok aplikácie.
+baseline*/metrics.json
+- Metriky nahrávok na referenčnom dokumente eko.pdf (prehľad v README, „Nahrávky“). Samotné
+  nahrávky (llm_calls.jsonl a výstupy) obsahujú text dokumentu a sú iba lokálne.
 
 
-Hlavna_cast
+qgen/ – jadro (pipeline bez webu)
+
+qgen/config.py
+- Všetky premenné prostredia (pydantic-settings). Jediné miesto, ktoré číta prostredie.
+
+qgen/cli.py
+- Spustenie pipeline z príkazového riadka; výsledky a reporty do priečinka, voliteľne units.
+
+qgen/pipeline.py
+- Celá pipeline po extrakcii: tematické celky a otázky.
+
+qgen/progress.py
+- Hlásenie priebehu progress_callback(stage, done, total).
+
+qgen/context_builder.py
+- Mapa strán dokumentu, čísla strán z citovaných zdrojov, kontext pre celok alebo otázku.
+
+qgen/contract/
+- Dátový kontrakt (Pydantic): options.py (vstupné nastavenia vrátane split), units.py (výstupný
+  formát pre ECEH), report.py, jobs.py (stav úlohy, webhook, chyby), schemas.py (JSON schémy).
+
+qgen/extraction/
+- text_extraction.py: text z PDF (pypdf), voliteľné OCR obrázkov (pymupdf, EasyOCR).
+- document_language.py: jazyk dokumentu (sk / en) cez LLM, záloha podľa textu.
+
+qgen/llm/
+- base.py (rozhranie LLM a embeddingov), factory.py (výber poskytovateľa, kontrola konfigurácie),
+  retry.py (opakovania, čakanie pri 429, JSON), parallel.py (súbežné batche), json_load.py
+  (bezpečné načítanie JSON), errors.py.
+- adapters/: gemini.py, openai_compatible.py (OpenAI, Mistral, vLLM, Ollama …), anthropic.py,
+  replay.py (odpovede z nahrávky, iba vývoj). Iba tu sa importujú knižnice výrobcov LLM.
+
+qgen/lo/ – tematické celky (v pôvodnom kóde learning objects)
+- generation.py (generovanie z textu po batchoch strán), clustering.py (embeddingy, zhlukovanie
+  podobných celkov), prerequisites.py (prerekvizity), validation.py, faithfulness.py (vernosť
+  voči textu), relevance_to_segment.py, topic_coverage.py (témy dokumentu a ich pokrytie),
+  pipeline.py (celý postup a filter).
+
+qgen/questions/ – otázky choice / open / no_answer
+- prompts.py (prompty), pipeline.py (generovanie, doplňujúce kolá, pokrytie celkov, hodnotenie,
+  filter), types.py (typy a ich pravidlá), validation.py, faithfulness.py, answerability.py,
+  relevance_to_lo.py, dedup.py (duplicitné otázky), hints.py (nápoveda so zdrojom – dokument a strany).
+
+qgen/split/ – rozdelenie do hodín (čisté funkcie bez LLM)
+- sections.py (vstup), order.py (poradie podľa prerekvizít), topics.py (témy a ich úseky),
+  syllabus.py (plán sylabu), lessons.py (režimy single, lessons, topics, syllabus, varovania).
+
+qgen/output/ – výstupný krok
+- split.py (krok split vrátane volaní LLM: témy, plán sylabu, názvy hodín), prompts.py,
+  units.py (formát units), limits.py (dĺžkové limity ECEH, skrátenie cez LLM), sanitize.py
+  (čistenie HTML nápovedí, nh3), report.py, check.py (kontrola modelom a JSON schémou).
 
 
-Hlavna_cast/app.py
-- Hlavný vstupný bod Streamlit aplikácie. Vytvára webové používateľské rozhranie, spracuje nahraté PDF, spúšťa extrakciu textu, generovanie vzdelávacích objektov, generovanie otázok a úloh a vizualizáciu.
+service/ – HTTP služba
 
-Hlavna_cast/context_builder.py
-- Obsahuje pomocné funkcie na prácu s textom. Vytvára mapu strán dokumentu, číta čísla strán z citovaných zdrojov a skladá kontext pre generovanie konkrétnych vzdelávacích objektov alebo položiek.
+service/main.py
+- FastAPI aplikácia (uvicorn service.main:app), OpenAPI dokumentácia na /docs.
 
-Hlavna_cast/document_language.py
-- Deteguje, či je dokument primárne v slovenčine alebo angličtine. Používa LLM klasifikáciu a pri chybe odhad podľa obsahu textu.
+service/settings.py
+- Nastavenia služby (qgen.config + backend mock/real).
 
-Hlavna_cast/item_answerability.py
-- Obsahuje hodnotenie, či sa na vygenerované otázky dá odpovedať zo zdrojového textu. Používa LLM a výstupom je report so skóre a zdôvodnením.
+service/startup.py
+- Bezpečnostná kontrola pri štarte: v produkcii odmietne štart bez QGEN_API_KEYS alebo bez
+  QGEN_WEBHOOK_SECRET pri zapnutých webhookoch.
 
-Hlavna_cast/item_faithfulness.py
-- Obsahuje hodnotenie, či odpovede k otázkam a úlohám zostávajú verné citovanému zdrojovému textu. Porovnáva obsah položky s relevantnými stranami dokumentu.
+service/healthcheck.py
+- Healthcheck kontajnerov (api, worker, webhook-worker).
 
-Hlavna_cast/item_pipeline.py
-- Riadi celý proces generovania a filtrovania otázok a úloh. Generuje položky pre vzdelávacie objekty, hodnotí ich kvalitu, kontroluje odpovedateľnosť, vernosť zdroju a pri Python úlohách aj spustiteľnosť testov.
+service/routes/
+- jobs.py (endpointy úloh), health.py (/health, /v1/info, schémy), deps.py (API kľúč, závislosti).
 
-Hlavna_cast/item_relevance_to_lo.py
-- Počíta podobnosť medzi vygenerovanou položkou a príslušným vzdelávacím objektom pomocou embeddingov. Slúži na kontrolu tematickej naviazanosti otázok a úloh.
+service/intake.py
+- Kontrola vstupu POST /v1/jobs: options, PDF, počet strán, OCR, sylabus.
 
-Hlavna_cast/item_validation.py
-- Formálne validuje JSON štruktúru otázok a úloh. Kontroluje povinné polia, typ položky, ID, citované zdroje, prázdne hodnoty a odkazy na existujúce vzdelávacie objekty.
+service/errors.py
+- Jednotný formát chýb API.
 
-Hlavna_cast/json_load.py
-- Obsahuje bezpečné načítanie JSON výstupov z odpovedí modelu. Ak odpoveď obsahuje text navyše, pokúsi sa z nej vybrať JSON pole alebo objekt.
+service/backend.py, service/real_backend.py
+- Rozhranie a skutočná implementácia úloh (job.json, fronta, external_ref v Redise).
 
-Hlavna_cast/llm_client.py
-- Rieši prácu s Gemini API. Načíta API kľúč zo súboru .env, vytvorí klienta a zabezpečuje, že v prípade chyby modelu sa generovanie opakuje.
+service/jobs/
+- models.py (obsah job.json), store.py (úlohy ako priečinky, atomický zápis), rq_queue.py a
+  queue.py (fronta RQ), runner.py (jeden beh úlohy vo workeri), tasks.py (úlohy RQ a údržba),
+  recovery.py (obnova nedokončených úloh), cleanup.py (mazanie PDF a výsledkov po TTL),
+  refs.py (rezervácie external_ref), redis_lock.py, events.py (udalosti pre webhooky),
+  convert.py (job.json → odpovede API).
 
-Hlavna_cast/lo_clustering.py
-- Zhlukuje podobné vzdelávacie objekty pomocou embeddingov a kosínovej podobnosti. Odstraňuje duplicitné alebo veľmi podobné LO.
+service/webhooks/
+- delivery.py (telo, hlavičky, pokus, plán opakovaní), signing.py (podpis HMAC-SHA256),
+  hosts.py (povolení hostitelia), rq_delivery.py (doručovanie cez frontu qgen-webhooks),
+  asyncio_dispatcher.py (iba mock).
 
-Hlavna_cast/lo_faithfulness.py
-- Obsahuje hodnotenie, či vzdelávacie objekty vychádzajú zo zdrojového textu. Pre každé LO porovnáva jeho obsah s citovanými stranami a vracia skóre vernosti.
+service/worker.py, service/webhook_worker.py
+- Vstupné body kontajnerov worker a webhook-worker.
 
-Hlavna_cast/lo_generation.py
-- Generuje vzdelávacie objekty z extrahovaného textu dokumentu. Text spracúva po batchoch, volá LLM, parsuje JSON a dopĺňa chýbajúce citované zdroje.
-
-Hlavna_cast/lo_pipeline.py
-- Riadi celý proces tvorby vzdelávacích objektov. Spúšťa generovanie, zhlukovanie, doplnenie prerekvizít, validáciu, kontrolu pokrytia tém, relevanciu a filtrovanie.
-
-Hlavna_cast/lo_relevance_to_segment.py
-- Porovnáva vzdelávacie objekty s citovaným zdrojovým segmentom pomocou embeddingov. Vytvára report o tom, ako dobre LO zodpovedá uvedeným stranám.
-
-Hlavna_cast/lo_validation.py
-- Formálne validuje vzdelávacie objekty. Kontroluje povinné polia, Bloomovu úroveň, ID, citované zdroje, prerekvizity, duplicity a odkazy na existujúce strany.
-
-Hlavna_cast/outputs.py
-- Obsahuje funkcie na ukladanie výstupov a reportov. Exportuje extrahovaný text, vzdelávacie objekty, otázky, PDF, TXT, JSON, časové reporty a hodnotiace reporty.
-
-Hlavna_cast/prerequisites.py
-- Dopĺňa prerekvizity medzi vzdelávacími objektmi pomocou LLM. Výstupom sú odkazy na LO, ktoré majú predchádzať iným LO.
-
-Hlavna_cast/python_code_eval.py
-- Automaticky kontroluje praktické Python úlohy. Overuje syntax, spustenie kódu a korektnosť riešenia podľa testovacích prípadov.
-
-Hlavna_cast/text_extraction.py
-- Extrahuje text z PDF dokumentu. Kombinuje klasické čítanie textu cez pypdf s OCR spracovaním obrázkov cez EasyOCR, PyMuPDF, NumPy a OpenCV.
-
-Hlavna_cast/topic_coverage.py
-- Identifikuje hlavné témy dokumentu a kontroluje, či sú pokryté vygenerovanými vzdelávacími objektmi. Používa LLM a embeddingovú podobnosť.
-
-Hlavna_cast/visualization.py
-- Vytvára vizualizácie vzdelávacích objektov, ich prerekvizít vo forme interaktívnej myšlienkovej mapy.
+service/mock/
+- Mock backend (simulované úlohy, pevný výsledok z fixtures/).
 
 
-Generované výstupy
+Ostatné
 
+schemas/
+- JSON schémy units (lesson.schema.json), reportu a options (generované z Pydantic modelov).
 
-Hlavna_cast/vystup/
-- Priečinok pre výstupy vytvárané aplikáciou. Automaticky sa vytvorí pri spracovaní dokumentu.
+tools/
+- baseline.py (nahrávka a metriky), recording_client.py, smoke_test.py (smoke test Dockeru),
+  resilience_check.py (odolnosť v kontajneroch), smoke_llm.py (jedno skutočné volanie LLM),
+  webhook_receiver.py (lokálny prijímač webhookov), export_schemas.py, dedup_report.py.
+
+tests/
+- Unit, kontraktové, replay a integračné testy (pytest). Nikdy nevolajú skutočné LLM.
+
+docs/
+- Špecifikácia (PDF), deployment.md (nasadenie), integration.md (integrácia do Laravelu).
