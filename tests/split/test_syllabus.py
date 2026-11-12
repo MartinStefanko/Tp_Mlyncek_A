@@ -94,10 +94,45 @@ def test_prerequisite_conflict_keeps_teachers_order():
 
 
 def test_plan_with_section_ids():
+    plan = SyllabusPlan(lessons=[planned("A", section_ids=[1, 2, 3]), planned("B", section_ids=[4, 5, 6])])
+    result = split_lessons(SIX, syllabus_text(), plan=plan)
+    assert ids(result) == [[1, 2, 3], [4, 5, 6]]
+    assert result.warnings == []
+
+
+def test_text_plan_moves_section_after_its_prerequisite():
+    # Chain 1 → 2 → … → 6: 4 is in lesson 1, its prerequisite 3 in lesson 2.
+    plan = SyllabusPlan(lessons=[planned("A", section_ids=[1, 2, 4]), planned("B", section_ids=[3, 5, 6])])
+    result = split_lessons(SIX, syllabus_text(), plan=plan)
+    assert ids(result) == [[1, 2], [3, 4, 5, 6]]
+    assert codes(result) == ["prerequisite_moved"]
+    assert result.warnings[0].message == "Syllabus: S-4 moved from lesson 1 to lesson 2, the lesson of its prerequisite S-3."
+
+
+def test_text_plan_move_takes_dependants_along_and_may_empty_a_lesson():
     plan = SyllabusPlan(lessons=[planned("A", section_ids=[4, 5, 6]), planned("B", section_ids=[1, 2, 3])])
     result = split_lessons(SIX, syllabus_text(), plan=plan)
-    assert ids(result) == [[4, 5, 6], [1, 2, 3]]
-    assert codes(result) == ["prerequisite_order"]  # 4 needs 3 from lesson 2
+    assert ids(result) == [[1, 2, 3, 4, 5, 6]]
+    assert [x.syllabus_index for x in result.lessons] == [1]
+    assert codes(result) == ["prerequisite_moved"] * 3 + ["empty_lesson"]
+
+
+def test_text_plan_move_goes_to_the_latest_prerequisite():
+    sections = [section(1, 10, page=1), section(2, 10, page=2), section(3, 10, page=3, prerequisites=(1, 2))]
+    plan = SyllabusPlan(lessons=[planned("A", section_ids=[3]), planned("B", section_ids=[1]),
+                                 planned("C", section_ids=[2])])
+    result = split_lessons(sections, syllabus_text(), plan=plan)
+    assert ids(result) == [[1], [2, 3]]
+    assert "lesson 3, the lesson of its prerequisite S-2" in result.warnings[0].message
+
+
+def test_teachers_list_is_not_moved():
+    sections = [section(1, 10, page=1, prerequisites=(2,)), section(2, 10, page=8)]
+    plan = SyllabusPlan(lessons=[planned("A", section_ids=[1]), planned("B", section_ids=[2])])
+    split = syllabus(lesson("A"), lesson("B"))  # the teacher's list: plan given, but no text
+    result = split_lessons(sections, split, plan=plan)
+    assert ids(result) == [[1], [2]]
+    assert codes(result) == ["prerequisite_order"]
 
 
 def test_plan_with_skipped_sections():

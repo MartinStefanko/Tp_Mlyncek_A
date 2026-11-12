@@ -154,6 +154,8 @@ def assign_sections(
     skipped: set[int],
     similarity: Optional[dict[int, Sequence[float]]],
     warnings: list[ReportWarning],
+    move_after_prerequisites: bool = False,
+    broken: frozenset[tuple[int, int]] | set[tuple[int, int]] = frozenset(),
 ) -> SyllabusAssignment:
     """Sections (in the order of step a) → lessons of a plan with lessons.
 
@@ -161,6 +163,10 @@ def assign_sections(
     matching pages (lessons given by section ids do not take part), ties by similarity, then
     the earlier lesson; without a matching page to the most similar lesson.
     `similarity[section id][lesson index]`.
+
+    move_after_prerequisites (plan made by the LLM from syllabus_text, not the teacher's
+    list): a section in an earlier lesson than a prerequisite moves to the lesson of its
+    latest prerequisite (`prerequisite_moved`); `broken` = edges removed to break cycles.
     """
     ranges = {
         index: parse_page_ranges(lesson.pages)
@@ -187,6 +193,9 @@ def assign_sections(
             candidates = list(range(len(plan.lessons)))
         lesson_of[section.id] = min(candidates, key=lambda i: (-(row[i] if row is not None else 0.0), i))
 
+    if move_after_prerequisites:
+        _move_after_prerequisites(ordered, lesson_of, broken, warnings)
+
     groups = []
     for index in range(len(plan.lessons)):
         members = [s for s in ordered if lesson_of.get(s.id) == index]
@@ -203,6 +212,32 @@ def assign_sections(
     if not groups:
         result.fallback_reason = "no lesson of the syllabus got a section"
     return result
+
+
+def _move_after_prerequisites(ordered, lesson_of: dict[int, int], broken, warnings: list[ReportWarning]) -> None:
+    """In the order of step a (prerequisites first), so a moved section takes its dependants along."""
+    for section in ordered:
+        if section.id not in lesson_of:
+            continue
+        later = [
+            (lesson_of[p], p)
+            for p in section.prerequisites
+            if p != section.id and (section.id, p) not in broken and p in lesson_of
+        ]
+        if not later:
+            continue
+        target, prerequisite = max(later)
+        if target > lesson_of[section.id]:
+            warnings.append(
+                ReportWarning(
+                    code="prerequisite_moved",
+                    message=(
+                        f"Syllabus: {section_label(section.id)} moved from lesson {lesson_of[section.id] + 1} to "
+                        f"lesson {target + 1}, the lesson of its prerequisite {section_label(prerequisite)}."
+                    ),
+                )
+            )
+            lesson_of[section.id] = target
 
 
 def _page_matches(section: SplitSection, ranges: list[tuple[int, int, int]]) -> int:

@@ -104,7 +104,7 @@ def split_lessons(
         result = SplitResult(lessons=_topics_mode(ordered, known, warnings), warnings=warnings)
         _check_balance(result)
     else:
-        result = _syllabus_mode(sections, ordered, split, syllabus_similarity, plan, known, warnings)
+        result = _syllabus_mode(sections, ordered, split, syllabus_similarity, plan, known, warnings, order.broken)
 
     _check_not_empty(result)
     _check_prerequisites(result, sections, order.broken)
@@ -197,7 +197,7 @@ def _topics_mode(ordered: list[SplitSection], known: _Topics, warnings: list[Rep
     return [_lesson(run, known, run_topic) for run in lessons]
 
 
-def _syllabus_mode(sections, ordered, split, similarity, plan, known, warnings) -> SplitResult:
+def _syllabus_mode(sections, ordered, split, similarity, plan, known, warnings, broken=frozenset()) -> SplitResult:
     if plan is None:
         if split.syllabus is None:
             return _fallback(ordered, known, warnings, "the syllabus text was not turned into a plan")
@@ -236,7 +236,12 @@ def _syllabus_mode(sections, ordered, split, similarity, plan, known, warnings) 
                 f"similarity must be {len(sections)} × {len(plan.lessons)} (sections × syllabus lessons)"
             )
         rows = {section.id: row for section, row in zip(sections, similarity)}
-    assignment = assign_sections(ordered, plan, claimed=claimed, skipped=skipped, similarity=rows, warnings=warnings)
+    assignment = assign_sections(
+        ordered, plan, claimed=claimed, skipped=skipped, similarity=rows, warnings=warnings,
+        # only a plan the LLM made from syllabus_text; the teacher's own list stays as given
+        move_after_prerequisites=split.syllabus is None,
+        broken=broken,
+    )
     if assignment.fallback_reason is not None:
         return _fallback(ordered, known, warnings, assignment.fallback_reason)
     run_topic = _run_topics(ordered, known)

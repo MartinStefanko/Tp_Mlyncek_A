@@ -1,0 +1,108 @@
+{
+  "created_at": "2026-11-12T08:06:58+00:00",
+  "run": {
+    "started_at": "2026-11-12T08:06:55+00:00",
+    "git_commit": "1a1ebd8444a150e1b81349b3c02bd73f8c884590",
+    "git_dirty": true,
+    "models_source": "base",
+    "llm_provider": "gemini",
+    "embed_provider": "gemini",
+    "llm_max_concurrency": 8,
+    "models_by_role": {
+      "lo": "gemini-3.1-flash-lite",
+      "prereq": "gemini-3.1-flash-lite",
+      "questions": "gemini-3.1-flash-lite",
+      "eval": "gemini-3.5-flash",
+      "check": "gemini-3.1-flash-lite",
+      "topics": "gemini-3.1-flash-lite",
+      "split": "gemini-3.1-flash-lite",
+      "embed": "gemini-embedding-001"
+    }
+  },
+  "base": {
+    "dir": "baseline_v5",
+    "git_commit": "dff7c00495fef11e486064a152d4171b0b8da0be",
+    "inputs": [
+      {
+        "name": "eko.pdf",
+        "sha256": "69075eae95e33be4fa3ef5938a4f7f61079477b37b623aae24c59a595ecf15e0"
+      }
+    ],
+    "unused_base_calls": 0
+  },
+  "split": {
+    "options": {
+      "mode": "single",
+      "lesson_count": null,
+      "lesson_minutes": null,
+      "syllabus": null,
+      "syllabus_text": null
+    },
+    "lessons": 1,
+    "questions_per_lesson": [
+      159
+    ],
+    "lesson_minutes": [
+      560.2
+    ],
+    "sections_per_lesson": [
+      [
+        "S-1",
+        "S-2",
+        "S-3",
+        "S-4",
+        "S-5",
+        "S-6",
+        "S-7",
+        "S-8",
+        "S-9",
+        "S-10",
+        "S-11",
+        "S-12",
+        "S-13",
+        "S-14",
+        "S-15",
+        "S-16",
+        "S-17",
+        "S-18",
+        "S-19",
+        "S-20",
+        "S-21",
+        "S-22",
+        "S-23",
+        "S-24",
+        "S-25",
+        "S-26",
+        "S-27",
+        "S-28",
+        "S-29",
+        "S-30",
+        "S-31",
+        "S-32",
+        "S-33",
+        "S-34",
+        "S-35",
+        "S-36",
+        "S-37",
+        "S-38",
+        "S-39",
+        "S-40",
+        "S-41",
+        "S-42"
+      ]
+    ],
+    "warnings": [
+      "choice_marking_wrong",
+      "choice_marking_wrong",
+      "choice_share_low"
+    ],
+    "dropped": 0,
+    "output_seconds": 1.7719
+  },
+  "llm_calls": {
+    "by_method": {
+      "generate_content": 1
+    },
+    "failed": 0
+  }
+}

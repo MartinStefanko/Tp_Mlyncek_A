@@ -25,12 +25,13 @@ class PlanSection:
     title: str
     pages: str  # "D1:4, D1:5"
     topic: Optional[str]
+    prerequisites: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
 class LessonPromptItem:
     number: int  # 1-based number of the lesson in the result
-    topics: tuple[str, ...]
+    topics: tuple[str, ...]  # topics of the lesson (mode single: all topics of the document)
     teacher_title: Optional[str]
     section_titles: tuple[str, ...]
 
@@ -58,11 +59,12 @@ Pravidlá:
 - celky hodiny urč cez "section_ids" (id zo zoznamu nižšie) ALEBO cez "pages" v tvare "D1:3-10" (ak učiteľ hovorí o stranách), nikdy nie oboje; ak hodinu nevieš priradiť ku konkrétnym celkom, nechaj "section_ids" prázdne a "pages" null
 - používaj iba id zo zoznamu, žiadne nevymýšľaj
 - celky, ktoré má podľa učiteľa vynechať, daj do "skipped_section_ids"; celky, ktoré učiteľ nespomenul, nikam nedávaj
+- celok nesmie byť v skoršej hodine ako jeho prerekvizity (stĺpec prerekvizity); ak by podľa textu učiteľa patril skôr, daj ho do hodiny jeho najneskoršej prerekvizity
 - ak učiteľ zadal iba počet hodín (napríklad „rozdeľ na 5 hodín“), vráť "lessons": [] a "lesson_count": 5
 - ak zadal iba dĺžku hodiny (napríklad „hodiny po 90 minút“), vráť "lessons": [] a "lesson_minutes": 90
 - názvy hodín píš po slovensky
 
-Tematické celky (id | názov | strany | téma):
+Tematické celky (id | názov | strany | téma | prerekvizity):
 {sections_text}
 
 Text učiteľa:
@@ -94,11 +96,12 @@ Rules:
 - give the sections of a lesson by "section_ids" (ids from the list below) OR by "pages" in the form "D1:3-10" (if the teacher speaks about pages), never both; if you cannot match a lesson to particular sections, leave "section_ids" empty and "pages" null
 - use only ids from the list, do not invent any
 - put the sections the teacher wants to leave out into "skipped_section_ids"; do not place sections the teacher did not mention anywhere
+- a section must not be in an earlier lesson than its prerequisites (column prerequisites); if the teacher's text would put it earlier, put it into the lesson of its latest prerequisite
 - if the teacher gave only the number of lessons (for example "split into 5 lessons"), return "lessons": [] and "lesson_count": 5
 - if the teacher gave only the lesson length (for example "90-minute lessons"), return "lessons": [] and "lesson_minutes": 90
 - write the lesson titles in English
 
-Sections (id | title | pages | topic):
+Sections (id | title | pages | topic | prerequisites):
 {sections_text}
 
 Teacher's text:
@@ -121,7 +124,8 @@ Vráť LEN validný JSON objekt {"items": [...]}, kde "items" je pole objektov v
 Pravidlá:
 - vráť práve jeden objekt pre každú hodinu zo zoznamu, s rovnakým číslom "lesson"
 - "title": výstižný názov obsahu hodiny, najviac 80 znakov, bez čísla hodiny a bez úvodzoviek
-- ak má hodina uvedenú tému, vychádzaj z jej názvu; ak má jedna téma viac hodín, odlíš ich podľa obsahu ich celkov
+- ak má hodina uvedené témy, vychádzaj z ich názvov; ak má jedna téma viac hodín, odlíš ich podľa obsahu ich celkov
+- názov a popis musia vystihnúť celý obsah hodiny (všetky jej témy a tematické celky), nielen jej začiatok
 - ak má hodina uvedený názov od učiteľa, vráť ho bez zmeny a popis napíš k nemu
 - "description": 1 až 3 vety (najviac 400 znakov) o tom, čo sa študenti v hodine naučia; obyčajný text bez HTML a bez odrážok
 - názvy rôznych hodín sa nesmú opakovať
@@ -142,7 +146,8 @@ Return ONLY a valid JSON object {"items": [...]}, where "items" is an array of o
 Rules:
 - return exactly one object for every lesson in the list, with the same "lesson" number
 - "title": a concise title of the lesson content, at most 80 characters, without the lesson number and without quotes
-- if a topic is given for the lesson, base the title on it; if one topic has several lessons, tell them apart by the content of their sections
+- if topics are given for the lesson, base the title on them; if one topic has several lessons, tell them apart by the content of their sections
+- the title and the description must cover the whole content of the lesson (all its topics and sections), not only its beginning
 - if a teacher's title is given, return it unchanged and write the description for it
 - "description": 1 to 3 sentences (at most 400 characters) about what the students learn in the lesson; plain text without HTML and without bullet points
 - titles of different lessons must not repeat
@@ -153,8 +158,8 @@ Lessons:
 """
 
 _LABELS = {
-    "sk": {"lesson": "Hodina", "topic": "Téma", "teacher": "Názov od učiteľa", "sections": "Tematické celky"},
-    "en": {"lesson": "Lesson", "topic": "Topic", "teacher": "Teacher's title", "sections": "Sections"},
+    "sk": {"lesson": "Hodina", "topic": "Témy", "teacher": "Názov od učiteľa", "sections": "Tematické celky"},
+    "en": {"lesson": "Lesson", "topic": "Topics", "teacher": "Teacher's title", "sections": "Sections"},
 }
 
 
@@ -165,7 +170,9 @@ def _one_line(text: str) -> str:
 def build_plan_prompt(syllabus_text: str, sections: Sequence[PlanSection], language: str) -> str:
     template = PLAN_EN if language == "en" else PLAN_SK
     rows = "\n".join(
-        f"{s.id} | {_one_line(s.title)} | {s.pages or '-'} | {_one_line(s.topic) if s.topic else '-'}" for s in sections
+        f"{s.id} | {_one_line(s.title)} | {s.pages or '-'} | {_one_line(s.topic) if s.topic else '-'} | "
+        f"{', '.join(str(p) for p in s.prerequisites) or '-'}"
+        for s in sections
     )
     # The teacher's text goes in last, so nothing in it can change the other placeholders.
     return template.replace("{sections_text}", rows).replace("{syllabus_text}", syllabus_text.strip()).strip()
@@ -182,7 +189,7 @@ def build_titles_prompt(lessons: Sequence[LessonPromptItem], language: str) -> s
     for lesson in lessons:
         lines = [f"{labels['lesson']} {lesson.number}"]
         if lesson.topics:
-            lines.append(f"{labels['topic']}: {', '.join(_one_line(t) for t in lesson.topics)}")
+            lines.append(f"{labels['topic']}: {'; '.join(_one_line(t) for t in lesson.topics)}")
         if lesson.teacher_title:
             lines.append(f"{labels['teacher']}: {_one_line(lesson.teacher_title)}")
         lines.append(f"{labels['sections']}:")

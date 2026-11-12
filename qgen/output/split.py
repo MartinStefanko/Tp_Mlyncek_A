@@ -128,6 +128,7 @@ def run_split(
                     title=by_id[s.id]["vzdelavaci_objekt"],
                     pages=", ".join(f"{doc}:{page}" if doc else str(page) for doc, page in s.pages),
                     topic=section_topics.get(s.id),
+                    prerequisites=s.prerequisites,
                 )
                 for s in split_sections
             ]
@@ -167,7 +168,9 @@ def run_split(
         ],
     )
     texts, title_warnings = _lesson_texts(
-        result, by_id, input_names=input_names, language=language, settings=settings, llm=llm, progress=progress
+        result, by_id, input_names=input_names, language=language, settings=settings, llm=llm, progress=progress,
+        # mode single: the one lesson holds the whole document, so all its topics
+        document_topics=tuple(topics) if split.mode == "single" else None,
     )
     progress.report()
     return SplitOutcome(
@@ -258,7 +261,9 @@ def make_syllabus_plan(
 # --- lesson titles ---------------------------------------------------------------------------------
 
 
-def _lesson_texts(result: SplitResult, by_id, *, input_names, language, settings, llm, progress) -> tuple[list[LessonText], list[ReportWarning]]:
+def _lesson_texts(
+    result: SplitResult, by_id, *, input_names, language, settings, llm, progress, document_topics=None
+) -> tuple[list[LessonText], list[ReportWarning]]:
     teacher: list[tuple[Optional[str], Optional[str]]] = []
     for lesson in result.lessons:
         planned = None
@@ -269,7 +274,7 @@ def _lesson_texts(result: SplitResult, by_id, *, input_names, language, settings
     asked = [
         LessonPromptItem(
             number=number,
-            topics=lesson.topics,
+            topics=document_topics or lesson.topics,
             teacher_title=teacher[number - 1][0],
             section_titles=tuple(by_id[sid]["vzdelavaci_objekt"] for sid in lesson.section_ids),
         )

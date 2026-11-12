@@ -177,8 +177,14 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   s chybami (cesty a druhy), potom záloha topics + `syllabus_plan_invalid`; LLMError tiež.
   Neznáme id a duplicity = varovania. Strany sylabu s D-indexom nad počet súborov → 400.
   Podobnosť celok × hodina sylabu: vektory celkov z pipeline + 1 embedding hodín.
+  Doladenie: sections_text v prompte plánu má stĺpec prerekvizít a pravidlo, že celok nesmie byť
+  skôr ako jeho prerekvizita. Poistka IBA pre plán z textu: taký celok sa presunie do hodiny
+  najneskoršej prerekvizity (v poradí a, takže ťahá závislé celky), `prerequisite_moved`; zoznam
+  od učiteľa sa nemení (ostáva `prerequisite_order`).
 - Názov a popis hodiny (bod f): LLM pre všetky hodiny naraz po `QGEN_SPLIT_TITLE_BATCH_SIZE`
   (10), AJ v režime single (rozhodnutie Martina: nová hodina v ECEH by sa inak volala podľa PDF).
+  Pri každej hodine riadok „Témy:“ (single: všetky témy dokumentu) a pravidlo, že názov a popis
+  musia vystihnúť celý obsah hodiny, nielen začiatok (single na eko.pdf vystihoval iba prvé celky).
   Sylabus: názov učiteľa/plánu, LLM iba pre chýbajúci popis. Text cez nh3 bez značiek,
   cut_at_word 255 / 4000. Zlyhanie → názvy tém, inak „prvý celok a ďalšie“, popis = zoznam
   celkov, `lesson_titles_failed`. Úloha kvôli splitu nikdy nezlyhá.
@@ -194,7 +200,7 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   test_cli --split odpovedajú na názvy hodín falošným klientom (`TitlesLLM`).
 - Windows: `atomic_write_bytes` opakuje `os.replace` pri PermissionError (antivírus drží súbor),
   najviac 10×; na Linuxe nie.
-- Kódy varovaní: prerequisite_cycle, prerequisite_order, lesson_count_reduced, lessons_unbalanced,
+- Kódy varovaní: prerequisite_cycle, prerequisite_order, prerequisite_moved, lesson_count_reduced, lessons_unbalanced,
   no_document_topics, empty_lesson, no_questions, syllabus_unknown_section,
   syllabus_duplicate_section, syllabus_skipped_sections, syllabus_fallback, syllabus_plan_invalid,
   syllabus_lesson_minutes_ignored, lesson_titles_failed.
