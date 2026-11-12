@@ -147,3 +147,25 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   `jsonschema` je preto v requirements-service.txt.
 - Otvorené: bod 1 špecifikácie (limity polí priamo v prompte generovania) = zmena promptu, teda
   nová nahrávka; zatiaľ nie.
+
+## Rozhodnutia z kroku 15 (rozdelenie do hodín)
+- `qgen/split/` (sections, order, syllabus, lessons) sú čisté funkcie bez LLM a embeddingov
+  (test_import_guard). Krok 16 dodá témy celkov, maticu podobnosti celok × hodina sylabu,
+  plán zo `syllabus_text` a názov/popis hodiny (LLM).
+- Poradie: Kahn, zhoda = (číslo dokumentu, prvá strana, id) ako lo_page_sort_key, D10 za D9.
+  Cyklus: v cyklickej komponente celok s najskoršou stranou stratí prerekvizity z komponenty.
+- lessons: DP s celočíselnou cenou Σ (T − C)², rez vnútri témy +0,02·C²; zhoda → skorší rez.
+  Celok > C = vlastná hodina (lesson_count sa zvýši s varovaním); lesson_count > počet celkov → zníži.
+- topics: behy jednej témy v poradí a; N = round(T / C); spájanie susedov, ak jeden < 80 % C
+  a spolu ≤ 120 % C. Celok bez témy patrí k predchádzajúcemu behu.
+- Sylabus (rozhodnutie Martina, režim instructions nebude): `split.syllabus` (zoznam) ALEBO
+  `split.syllabus_text` (voľný text ≤ 4000), práve jedno. Text LLM iba prevedie na interný
+  `SyllabusPlan` (hodiny so stranami ALEBO section_ids, skipped_section_ids, alebo iba
+  lesson_count / lesson_minutes → algoritmus lessons). Verejná SyllabusLesson sa nezmenila.
+  Zlý plán nikdy nezlyhá: neznáme id a duplicity = varovania; nič použiteľné → záloha topics
+  (`SplitResult.fallback`). Strany sylabu s D-indexom nad počet súborov → 400 invalid_options.
+- Prázdny vstup → žiadne hodiny; čo dať do units (min. 1), rozhodne krok 16.
+- Kódy varovaní: prerequisite_cycle, prerequisite_order, section_over_capacity,
+  lesson_time_deviation, lesson_over_capacity, lesson_count_reduced, lesson_count_increased,
+  empty_lesson, syllabus_unknown_section, syllabus_duplicate_section, syllabus_skipped_sections,
+  syllabus_fallback.

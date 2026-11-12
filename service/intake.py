@@ -13,6 +13,7 @@ from fastapi import UploadFile
 from pydantic import ValidationError
 
 from qgen.contract import JobOptions, resolve_options
+from qgen.contract.options import parse_page_ranges
 from service.backend import UploadedFile
 from service.errors import ApiError, invalid_options, invalid_options_from
 from service.settings import ServiceSettings
@@ -55,6 +56,33 @@ def check_callback_host(options: JobOptions, settings: ServiceSettings) -> None:
         f"callback_url: {reason}.",
         [{"loc": ["callback_url"], "msg": f"Host '{host}' is not in QGEN_WEBHOOK_ALLOWED_HOSTS.", "type": "host_not_allowed"}],
     )
+
+
+def check_syllabus_files(options: JobOptions, file_count: int) -> None:
+    """Page ranges of a syllabus list may only name uploaded documents (D1 … D<file_count>).
+
+    A page after the end of a PDF is not rejected: such a range matches no section and the
+    split uses the similarity instead. syllabus_text is not checked (the LLM reads it).
+    """
+    split = options.split
+    if split.mode != "syllabus" or not split.syllabus:
+        return
+    errors = []
+    for index, lesson in enumerate(split.syllabus):
+        if lesson.pages is None:
+            continue
+        for doc, _first, _last in parse_page_ranges(lesson.pages):
+            if doc > file_count:
+                errors.append(
+                    {
+                        "loc": ["split", "syllabus", index, "pages"],
+                        "msg": f"Document D{doc} does not exist; {file_count} file(s) uploaded.",
+                        "type": "unknown_document",
+                    }
+                )
+                break
+    if errors:
+        raise invalid_options("split.syllabus: page ranges name a document that was not uploaded.", errors)
 
 
 def check_ocr(options: JobOptions) -> None:

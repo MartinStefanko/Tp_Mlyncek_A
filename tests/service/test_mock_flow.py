@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from qgen.contract import CreateJobResponse, JobListResponse, JobStatus, Report, UnitsResult
+from qgen.contract import CreateJobResponse, JobListResponse, JobOptions, JobStatus, Report, UnitsResult
 from service.mock.backend import STAGES
 
 from .conftest import CALLBACK_URL, DURATION_S, PDF, assert_error, make_pdf
@@ -135,7 +135,7 @@ def test_stored_options_are_complete(api):
         "language": "auto",
         "extraction": {"ocr": False},
         "questions": {"types": ["open"], "per_section": 3, "choice_options": 4, "hints": 2},
-        "split": {"mode": "single", "lesson_count": None, "lesson_minutes": 45, "syllabus": None},
+        "split": {"mode": "single", "lesson_count": None, "lesson_minutes": 45, "syllabus": None, "syllabus_text": None},
     }
 
 
@@ -177,7 +177,7 @@ def test_status_timestamps_are_utc(api):
     assert created.utcoffset() == timedelta(0)
 
 
-@pytest.mark.parametrize("path", ["/v1/schema/lesson", "/v1/schema/report"])
+@pytest.mark.parametrize("path", ["/v1/schema/lesson", "/v1/schema/report", "/v1/schema/options"])
 def test_schema_endpoints_equal_exported_files(api, path):
     name = path.rsplit("/", 1)[1]
     exported = _load(Path(__file__).resolve().parents[2] / "schemas" / f"{name}.schema.json")
@@ -211,6 +211,7 @@ def test_health_info_docs(api):
         "/v1/jobs/{job_id}/retry",
         "/v1/schema/lesson",
         "/v1/schema/report",
+        "/v1/schema/options",
     }
     assert set(paths["/v1/jobs/{job_id}"]) == {"get", "delete"}
 
@@ -224,3 +225,10 @@ def test_info_shows_the_providers_and_replay(api_factory, tmp_path):
     api = api_factory(llm_provider="replay", embed_provider="replay", llm_replay_path=tmp_path / "calls.jsonl")
     models = api.client.get("/v1/info", headers=api.headers).json()["models"]
     assert (models["llm_provider"], models["embed_provider"], models["replay"]) == ("replay", "replay", True)
+
+
+@pytest.mark.parametrize("name", list(_load(MOCK_FIXTURES / "options_examples.json")))
+def test_options_examples_are_accepted(api, name):
+    example = _load(MOCK_FIXTURES / "options_examples.json")[name]
+    JobOptions.model_validate(example)
+    assert api.create(example).status_code == 202

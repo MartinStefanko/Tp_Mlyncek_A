@@ -10,6 +10,7 @@ Checks that need configuration (QGEN_WEBHOOK_ALLOWED_HOSTS, OCR not installed)
 are API logic, not part of these models.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Annotated, Literal, Optional, Union
 
@@ -21,9 +22,36 @@ LESSON_MINUTES_MIN = 5
 LESSON_MINUTES_MAX = 240
 LESSON_COUNT_MAX = 100
 SYLLABUS_MAX_LESSONS = 100
+SYLLABUS_TEXT_MAX = UNIT_DESCRIPTION_MAX
 
 # One or more page ranges, e.g. "D1:1-10" or "D1:1-10, D2:3".
 PAGE_RANGES_PATTERN = r"^D\d+:\d+(-\d+)?(\s*,\s*D\d+:\d+(-\d+)?)*$"
+_PAGE_RANGE_RE = re.compile(r"D(\d+):(\d+)(?:-(\d+))?")
+
+PageRange = tuple[int, int, int]  # (document number, first page, last page), 1-based
+
+
+def parse_page_ranges(text: str) -> list[PageRange]:
+    """'D1:1-10, D2:3' → [(1, 1, 10), (2, 3, 3)]; the text must match PAGE_RANGES_PATTERN."""
+    ranges = []
+    for doc, first, last in _PAGE_RANGE_RE.findall(text):
+        start = int(first)
+        ranges.append((int(doc), start, int(last) if last else start))
+    return ranges
+
+
+def page_range_errors(text: str) -> list[str]:
+    """Problems of page ranges that the pattern cannot express; [] when they are fine."""
+    errors = []
+    for doc, first, last in parse_page_ranges(text):
+        if doc < 1:
+            errors.append(f"document number must be at least 1 (D{doc})")
+        if first < 1:
+            errors.append(f"page must be at least 1 (D{doc}:{first})")
+        if last < first:
+            errors.append(f"range end is before its start (D{doc}:{first}-{last})")
+    return errors
+
 
 LessonMinutes = Annotated[int, Field(ge=LESSON_MINUTES_MIN, le=LESSON_MINUTES_MAX, description="Lesson length in minutes.")]
 LessonCount = Annotated[int, Field(ge=1, le=LESSON_COUNT_MAX, description="Number of lessons.")]
@@ -73,6 +101,9 @@ class QuestionOptions(_OptionsModel):
 # example from Príloha A ({"mode": "topics", "lesson_count": null, ..., "syllabus": null})
 # stays valid while a value in a field that the mode does not use is rejected.
 # A missing lesson_minutes is filled by resolve_options (QGEN_DEFAULT_LESSON_MINUTES).
+# Mode "syllabus" takes the teacher's syllabus either as a list of lessons (`syllabus`) or
+# as free text (`syllabus_text`, turned into a structured plan by the LLM in step 16; the
+# text is never executed) – exactly one of the two.
 
 
 class SingleSplit(_OptionsModel):
@@ -80,6 +111,7 @@ class SingleSplit(_OptionsModel):
     lesson_count: None = None
     lesson_minutes: Optional[LessonMinutes] = None
     syllabus: None = None
+    syllabus_text: None = None
 
 
 class LessonsSplit(_OptionsModel):
@@ -87,6 +119,7 @@ class LessonsSplit(_OptionsModel):
     lesson_count: Optional[LessonCount] = None
     lesson_minutes: Optional[LessonMinutes] = None
     syllabus: None = None
+    syllabus_text: None = None
 
     @model_validator(mode="after")
     def _count_or_minutes(self) -> "LessonsSplit":
@@ -100,6 +133,7 @@ class TopicsSplit(_OptionsModel):
     lesson_count: None = None
     lesson_minutes: Optional[LessonMinutes] = None
     syllabus: None = None
+    syllabus_text: None = None
 
 
 class SyllabusLesson(_OptionsModel):
@@ -111,12 +145,40 @@ class SyllabusLesson(_OptionsModel):
         description="Page ranges, e.g. 'D1:1-10' or 'D1:1-10, D2:3'.",
     )
 
+    @model_validator(mode="after")
+    def _valid_pages(self) -> "SyllabusLesson":
+        errors = page_range_errors(self.pages) if self.pages is not None else []
+        if errors:
+            raise ValueError("pages: " + "; ".join(errors))
+        return self
+
 
 class SyllabusSplit(_OptionsModel):
     mode: Literal["syllabus"]
     lesson_count: None = None
     lesson_minutes: Optional[LessonMinutes] = None
-    syllabus: list[SyllabusLesson] = Field(min_length=1, max_length=SYLLABUS_MAX_LESSONS)
+    syllabus: Optional[list[SyllabusLesson]] = Field(
+        default=None,
+        min_length=1,
+        max_length=SYLLABUS_MAX_LESSONS,
+        description="Teacher's lessons: title, optional description and page ranges.",
+    )
+    syllabus_text: Optional[str] = Field(
+        default=None,
+        max_length=SYLLABUS_TEXT_MAX,
+        description=(
+            "Teacher's syllabus as free text, e.g. '3 hodiny: najprv teória úrokovania, potom "
+            "príklady, perpetuity vynechaj'. The service only turns it into a list of lessons."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _list_or_text(self) -> "SyllabusSplit":
+        if self.syllabus_text is not None and not self.syllabus_text.strip():
+            raise ValueError("syllabus_text must not be empty")
+        if (self.syllabus is None) == (self.syllabus_text is None):
+            raise ValueError("split mode 'syllabus' needs exactly one of syllabus, syllabus_text")
+        return self
 
 
 SplitOptions = Annotated[

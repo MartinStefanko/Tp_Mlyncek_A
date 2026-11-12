@@ -1,0 +1,455 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qgen/schemas/options.schema.json",
+  "description": "Vstupné parametre options (POST /v1/jobs)",
+  "$defs": {
+    "ExtractionOptions": {
+      "additionalProperties": false,
+      "properties": {
+        "ocr": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OCR of images in the PDF. Default: QGEN_OCR_ENABLED.",
+          "title": "Ocr"
+        }
+      },
+      "title": "ExtractionOptions",
+      "type": "object"
+    },
+    "LessonsSplit": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "lessons",
+          "title": "Mode",
+          "type": "string"
+        },
+        "lesson_count": {
+          "anyOf": [
+            {
+              "description": "Number of lessons.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lesson Count"
+        },
+        "lesson_minutes": {
+          "anyOf": [
+            {
+              "description": "Lesson length in minutes.",
+              "maximum": 240,
+              "minimum": 5,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lesson Minutes"
+        },
+        "syllabus": {
+          "default": null,
+          "title": "Syllabus",
+          "type": "null"
+        },
+        "syllabus_text": {
+          "default": null,
+          "title": "Syllabus Text",
+          "type": "null"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "LessonsSplit",
+      "type": "object"
+    },
+    "QuestionOptions": {
+      "additionalProperties": false,
+      "properties": {
+        "types": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "choice",
+                  "open",
+                  "no_answer"
+                ],
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Question types to generate. Default: all three.",
+          "title": "Types"
+        },
+        "per_section": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Questions per section (tematický celok). Default: 3.",
+          "title": "Per Section"
+        },
+        "choice_options": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 2,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Number of options for a choice question. Default: 4.",
+          "title": "Choice Options"
+        },
+        "hints": {
+          "anyOf": [
+            {
+              "maximum": 2,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "0 = no hint; 1 or more = one hint with the source of the question (original document name and page numbers, e.g. name 'Zdroj', url '<p>eko.pdf, strana 14</p>'), made by the service, not by the LLM. Default: 2 (= one hint).",
+          "title": "Hints"
+        }
+      },
+      "title": "QuestionOptions",
+      "type": "object"
+    },
+    "SingleSplit": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "single",
+          "default": "single",
+          "title": "Mode",
+          "type": "string"
+        },
+        "lesson_count": {
+          "default": null,
+          "title": "Lesson Count",
+          "type": "null"
+        },
+        "lesson_minutes": {
+          "anyOf": [
+            {
+              "description": "Lesson length in minutes.",
+              "maximum": 240,
+              "minimum": 5,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lesson Minutes"
+        },
+        "syllabus": {
+          "default": null,
+          "title": "Syllabus",
+          "type": "null"
+        },
+        "syllabus_text": {
+          "default": null,
+          "title": "Syllabus Text",
+          "type": "null"
+        }
+      },
+      "title": "SingleSplit",
+      "type": "object"
+    },
+    "SyllabusLesson": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "pages": {
+          "anyOf": [
+            {
+              "pattern": "^D\\d+:\\d+(-\\d+)?(\\s*,\\s*D\\d+:\\d+(-\\d+)?)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Page ranges, e.g. 'D1:1-10' or 'D1:1-10, D2:3'.",
+          "title": "Pages"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "title": "SyllabusLesson",
+      "type": "object"
+    },
+    "SyllabusSplit": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "syllabus",
+          "title": "Mode",
+          "type": "string"
+        },
+        "lesson_count": {
+          "default": null,
+          "title": "Lesson Count",
+          "type": "null"
+        },
+        "lesson_minutes": {
+          "anyOf": [
+            {
+              "description": "Lesson length in minutes.",
+              "maximum": 240,
+              "minimum": 5,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lesson Minutes"
+        },
+        "syllabus": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/SyllabusLesson"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Teacher's lessons: title, optional description and page ranges.",
+          "title": "Syllabus"
+        },
+        "syllabus_text": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Teacher's syllabus as free text, e.g. '3 hodiny: najprv teória úrokovania, potom príklady, perpetuity vynechaj'. The service only turns it into a list of lessons.",
+          "title": "Syllabus Text"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "SyllabusSplit",
+      "type": "object"
+    },
+    "TopicsSplit": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "topics",
+          "title": "Mode",
+          "type": "string"
+        },
+        "lesson_count": {
+          "default": null,
+          "title": "Lesson Count",
+          "type": "null"
+        },
+        "lesson_minutes": {
+          "anyOf": [
+            {
+              "description": "Lesson length in minutes.",
+              "maximum": 240,
+              "minimum": 5,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lesson Minutes"
+        },
+        "syllabus": {
+          "default": null,
+          "title": "Syllabus",
+          "type": "null"
+        },
+        "syllabus_text": {
+          "default": null,
+          "title": "Syllabus Text",
+          "type": "null"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "TopicsSplit",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "external_ref": {
+      "anyOf": [
+        {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Caller's own identifier; unique per API key; required for ECEH.",
+      "title": "External Ref"
+    },
+    "callback_url": {
+      "anyOf": [
+        {
+          "format": "uri",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Webhook address; host must be in QGEN_WEBHOOK_ALLOWED_HOSTS (checked by the API).",
+      "title": "Callback Url"
+    },
+    "language": {
+      "anyOf": [
+        {
+          "enum": [
+            "auto",
+            "sk",
+            "en"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Document language. Default: 'auto'.",
+      "title": "Language"
+    },
+    "extraction": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExtractionOptions"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "questions": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/QuestionOptions"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "split": {
+      "discriminator": {
+        "mapping": {
+          "lessons": "#/$defs/LessonsSplit",
+          "single": "#/$defs/SingleSplit",
+          "syllabus": "#/$defs/SyllabusSplit",
+          "topics": "#/$defs/TopicsSplit"
+        },
+        "propertyName": "mode"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SingleSplit"
+        },
+        {
+          "$ref": "#/$defs/LessonsSplit"
+        },
+        {
+          "$ref": "#/$defs/TopicsSplit"
+        },
+        {
+          "$ref": "#/$defs/SyllabusSplit"
+        }
+      ],
+      "title": "Split"
+    }
+  },
+  "title": "JobOptions",
+  "type": "object"
+}

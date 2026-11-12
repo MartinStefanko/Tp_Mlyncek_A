@@ -27,6 +27,10 @@ def _post_raw_options(api, raw: str):
         '{"questions": {"per_section": "three"}}',
         '{"questions": {"per_learning_object": 3}}',
         '{"split": {"mode": "syllabus"}}',
+        '{"split": {"mode": "syllabus", "syllabus": [{"title": "A"}], "syllabus_text": "2 hodiny"}}',
+        '{"split": {"mode": "syllabus", "syllabus_text": " "}}',
+        '{"split": {"mode": "syllabus", "syllabus": [{"title": "A", "pages": "D1:9-2"}]}}',
+        '{"split": {"mode": "syllabus", "syllabus": [{"title": "A", "pages": "D2:1-5"}]}}',
         '{"split": {"mode": "topics", "lesson_count": 4}}',
         '{"callback_url": "ftp://eceh-backend/hook"}',
         '{"unknown": 1}',
@@ -43,6 +47,23 @@ def test_invalid_options(api, raw):
 def test_invalid_options_details_point_to_field(api):
     error = assert_error(_post_raw_options(api, '{"split": {"mode": "syllabus"}}'), 400, "invalid_options")
     assert error["details"]["errors"][0]["loc"][:2] == ["split", "syllabus"]
+
+
+def test_syllabus_pages_must_name_uploaded_documents(api):
+    raw = '{"split": {"mode": "syllabus", "syllabus": [{"title": "A", "pages": "D1:1-3"}, {"title": "B", "pages": "D1:4, D3:1"}]}}'
+    error = assert_error(_post_raw_options(api, raw), 400, "invalid_options")
+    assert error["details"]["errors"] == [
+        {"loc": ["split", "syllabus", 1, "pages"], "msg": "Document D3 does not exist; 1 file(s) uploaded.", "type": "unknown_document"}
+    ]
+    two_files = [("files", ("a.pdf", PDF, "application/pdf")), ("files", ("b.pdf", PDF, "application/pdf"))]
+    ok = '{"split": {"mode": "syllabus", "syllabus": [{"title": "A", "pages": "D2:1-3"}]}}'
+    response = api.client.post("/v1/jobs", headers=api.headers, files=two_files, data={"options": ok})
+    assert response.status_code == 202
+
+
+def test_syllabus_text_accepted(api):
+    raw = '{"split": {"mode": "syllabus", "syllabus_text": "3 hodiny: najprv teória, potom príklady"}}'
+    assert _post_raw_options(api, raw).status_code == 202
 
 
 def test_callback_host_not_allowed(api):

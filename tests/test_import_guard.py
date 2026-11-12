@@ -58,3 +58,17 @@ def test_qgen_does_not_import_service():
         if "__pycache__" not in path.parts and SERVICE_IMPORT.search(path.read_text(encoding="utf-8-sig"))
     ]
     assert offenders == []
+
+
+SPLIT_FORBIDDEN_IMPORT = re.compile(r"^\s*(?:import|from)\s+qgen\.(?:llm|lo|questions|output|pipeline)\b", re.M)
+
+
+def test_split_has_no_llm_or_embeddings():
+    """qgen/split (step 15) is pure: no LLM client, no embeddings, no pipeline modules."""
+    offenders = [
+        str(path.relative_to(REPO))
+        for path in (REPO / "qgen" / "split").rglob("*.py")
+        if "__pycache__" not in path.parts
+        and (SPLIT_FORBIDDEN_IMPORT.search(text := path.read_text(encoding="utf-8-sig")) or VENDOR_IMPORT.search(text))
+    ]
+    assert offenders == []

@@ -1,4 +1,4 @@
-"""GET /health, GET /v1/info, GET /v1/schema/lesson, GET /v1/schema/report."""
+"""GET /health, GET /v1/info, GET /v1/schema/lesson, /report and /options."""
 
 from dataclasses import asdict
 from typing import Any
@@ -83,3 +83,10 @@ def lesson_schema(_owner: Owner) -> dict[str, Any]:
 @router.get("/v1/schema/report", tags=["schema"], summary="JSON Schema of the report.", responses=_AUTH_ERRORS)
 def report_schema(_owner: Owner) -> dict[str, Any]:
     return build_schema("report")
+
+
+@router.get(
+    "/v1/schema/options", tags=["schema"], summary="JSON Schema of the job options.", responses=_AUTH_ERRORS
+)
+def options_schema(_owner: Owner) -> dict[str, Any]:
+    return build_schema("options")

@@ -9,7 +9,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from qgen.contract import CreateJobResponse, ErrorResponse, JobLinks, JobListResponse, JobStatus, Report, UnitsResult
 from service.backend import CreateJobRequest
-from service.intake import check_ocr, inspect_pdfs, parse_options, read_pdf_files
+from service.intake import check_ocr, check_syllabus_files, inspect_pdfs, parse_options, read_pdf_files
 from service.routes.deps import Backend, Owner, Settings
 
 router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
@@ -78,7 +78,13 @@ async def create_job(
         Optional[list[Union[UploadFile, str]]],
         File(alias="files[]", description="PDF files (field name 'files[]', e.g. from Laravel)."),
     ] = None,
-    options: Annotated[Optional[str], Form(description="JSON string with options; all fields optional.")] = None,
+    options: Annotated[Optional[str], Form(
+            description=(
+                "JSON string with options; all fields optional. JSON Schema: GET /v1/schema/options. "
+                "Mode 'syllabus' takes exactly one of split.syllabus (list of lessons) or "
+                "split.syllabus_text (teacher's free text)."
+            )
+        )] = None,
 ) -> CreateJobResponse:
     uploads = [*_uploads(files, "files"), *_uploads(files_brackets, "files[]")]
     if not uploads:
@@ -87,6 +93,7 @@ async def create_job(
         )
     # Order of the checks: kap. 3 – Význam odpovede 202 (API key is the Owner dependency).
     resolved = parse_options(options, settings)
+    check_syllabus_files(resolved, len(uploads))
     if settings.backend == "real":
         check_ocr(resolved)
     pdfs = await read_pdf_files(uploads, settings)

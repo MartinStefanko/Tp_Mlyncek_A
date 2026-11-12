@@ -23,7 +23,7 @@ APPENDIX_EXAMPLE = {
         "choice_options": 4,
         "hints": 2,
     },
-    "split": {"mode": "topics", "lesson_count": None, "lesson_minutes": 45, "syllabus": None},
+    "split": {"mode": "topics", "lesson_count": None, "lesson_minutes": 45, "syllabus": None, "syllabus_text": None},
 }
 
 
@@ -64,6 +64,15 @@ def test_appendix_example_passes():
             SyllabusSplit,
         ),
         ({"mode": "lessons", "lesson_count": 3}, LessonsSplit),
+        (
+            {
+                "mode": "syllabus",
+                "syllabus_text": "3 hodiny: najprv teória úrokovania, potom príklady, perpetuity vynechaj",
+            },
+            SyllabusSplit,
+        ),
+        ({"mode": "syllabus", "syllabus": [{"title": "A", "pages": "D1:1-10, D2:3"}], "syllabus_text": None}, SyllabusSplit),
+        ({"mode": "topics", "syllabus_text": None}, TopicsSplit),
         ({"mode": "lessons", "lesson_minutes": 90}, LessonsSplit),
         ({"mode": "topics"}, TopicsSplit),
     ],
@@ -80,6 +89,18 @@ def test_valid_split_modes(split, cls):
         {"mode": "syllabus", "syllabus": []},
         {"mode": "syllabus", "syllabus": [{"description": "bez názvu"}]},
         {"mode": "syllabus", "syllabus": [{"title": "A", "pages": "1-10"}]},
+        {"mode": "syllabus", "syllabus": [{"title": "A", "pages": "D1:10-3"}]},
+        {"mode": "syllabus", "syllabus": [{"title": "A", "pages": "D0:1"}]},
+        {"mode": "syllabus", "syllabus": [{"title": "A", "pages": "D1:0-4"}]},
+        {"mode": "syllabus", "syllabus": [{"title": "A"}], "syllabus_text": "2 hodiny"},
+        {"mode": "syllabus", "syllabus_text": None},
+        {"mode": "syllabus", "syllabus_text": ""},
+        {"mode": "syllabus", "syllabus_text": "   "},
+        {"mode": "syllabus", "syllabus_text": "x" * 4001},
+        {"mode": "syllabus", "syllabus": None, "syllabus_text": None},
+        {"mode": "topics", "syllabus_text": "2 hodiny"},
+        {"mode": "lessons", "lesson_count": 2, "syllabus_text": "2 hodiny"},
+        {"mode": "single", "syllabus_text": "2 hodiny"},
         {"mode": "lessons"},
         {"mode": "lessons", "lesson_count": None, "lesson_minutes": None},
         {"mode": "lessons", "lesson_count": 0},
@@ -151,7 +172,13 @@ def test_resolve_empty_options():
         "language": "auto",
         "extraction": {"ocr": False},
         "questions": {"types": ["choice", "open", "no_answer"], "per_section": 3, "choice_options": 4, "hints": 2},
-        "split": {"mode": "single", "lesson_count": None, "lesson_minutes": 45, "syllabus": None},
+        "split": {
+            "mode": "single",
+            "lesson_count": None,
+            "lesson_minutes": 45,
+            "syllabus": None,
+            "syllabus_text": None,
+        },
     }
 
 
@@ -194,3 +221,9 @@ def test_resolved_options_survive_json_round_trip():
 def test_resolve_rejects_invalid_defaults():
     with pytest.raises(ValidationError):
         resolve_options(JobOptions(), OptionDefaults(lesson_minutes=0))
+
+
+def test_syllabus_text_survives_resolve():
+    text = "5 hodín, perpetuity vynechaj"
+    resolved = resolve_options(JobOptions.model_validate({"split": {"mode": "syllabus", "syllabus_text": text}}), SPEC_DEFAULTS)
+    assert (resolved.split.syllabus, resolved.split.syllabus_text, resolved.split.lesson_minutes) == (None, text, 45)
