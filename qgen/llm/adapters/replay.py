@@ -48,7 +48,7 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional, Sequence
 
 from qgen.llm.base import LLMResponse
 from qgen.llm.errors import OutputTruncatedError, ProviderError
@@ -138,19 +138,29 @@ def _embeddings(record: dict) -> list[list[float]]:
 
 
 class ReplayClient:
-    """LLMClient + EmbeddingClient over a recording, for tests (answers are used up)."""
+    """LLMClient + EmbeddingClient over a recording, for tests (answers are used up).
 
-    def __init__(self, jsonl_path: str | Path, transforms: Iterable[RecordingTransform] = ()):
+    `jsonl_path` may be a list: the recordings are joined in that order (e.g. baseline_v5
+    and a short recording of the split step on top of it, tools/baseline.py --base)."""
+
+    def __init__(
+        self,
+        jsonl_path: str | Path | Sequence[str | Path],
+        transforms: Iterable[RecordingTransform] = (),
+    ):
         self.transforms = list(transforms)
         self._queues: dict[tuple, deque] = defaultdict(deque)
         self._known_keys: set[tuple] = set()
         self._lock = threading.Lock()
         self.calls: list[tuple[str, str]] = []
-        for record in read_recording(jsonl_path):
-            contents = self._transform(record["method"], record["contents"])
-            key = (record["method"], record["model"], input_hash(contents))
-            self._queues[key].append(record)
-            self._known_keys.add(key)
+        paths = [jsonl_path] if isinstance(jsonl_path, (str, Path)) else list(jsonl_path)
+        for order, path in enumerate(paths):
+            for record in read_recording(path):
+                record["_recording"] = order
+                contents = self._transform(record["method"], record["contents"])
+                key = (record["method"], record["model"], input_hash(contents))
+                self._queues[key].append(record)
+                self._known_keys.add(key)
 
     def _transform(self, method: str, contents: Any) -> Any:
         for transform in self.transforms:
@@ -193,10 +203,16 @@ class ReplayClient:
         _raise_recorded_error(record)
         return _embeddings(record)
 
-    def unused_records(self) -> list[dict]:
-        """Recorded calls that the run never asked for, in recorded order."""
-        rest = [record for queue in self._queues.values() for record in queue]
-        return sorted(rest, key=lambda r: r.get("seq", 0))
+    def unused_records(self, recording: Optional[int] = None) -> list[dict]:
+        """Recorded calls that the run never asked for, in recorded order; `recording`:
+        only those of that recording (index in the list given to __init__)."""
+        rest = [
+            record
+            for queue in self._queues.values()
+            for record in queue
+            if recording is None or record.get("_recording") == recording
+        ]
+        return sorted(rest, key=lambda r: (r.get("_recording", 0), r.get("seq", 0)))
 
 
 class ReplayLLM:

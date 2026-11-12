@@ -66,7 +66,8 @@ def test_defaults(clean_env):
     assert (s.context_max_chars, s.language_sample_max_chars, s.topic_source_max_chars) == (8000, 12000, 20000)
     # Príloha D
     assert s.ocr_enabled is False
-    assert s.default_lesson_minutes == 45
+    assert not hasattr(s, "default_lesson_minutes")  # removed in step 16
+    assert s.split_title_batch_size == 10
     assert s.api_key_list == []
     assert (s.max_files, s.max_upload_mb, s.max_pages, s.max_active_jobs) == (10, 50, 300, 10)
     assert (s.result_ttl_days, s.failed_input_ttl_hours) == (7, 24)
@@ -181,7 +182,7 @@ def test_setting_or_default(clean_env):
 
 def test_service_settings_share_the_definitions(clean_env):
     clean_env.setenv("QGEN_MAX_FILES", "4")
-    clean_env.setenv("QGEN_DEFAULT_LESSON_MINUTES", "60")
+    clean_env.setenv("QGEN_DEFAULT_LESSON_MINUTES", "60")  # removed setting: ignored
     service = ServiceSettings(_env_file=None)
     core = Settings(_env_file=None)
     assert isinstance(service, Settings)
@@ -189,7 +190,7 @@ def test_service_settings_share_the_definitions(clean_env):
     assert {k: v for k, v in service.model_dump().items() if k in shared} == core.model_dump()
     assert set(ServiceSettings.model_fields) - shared == {"backend", "mock_duration_s"}
     assert service.max_files == 4
-    assert service.option_defaults() == OptionDefaults(ocr=False, lesson_minutes=60)
+    assert service.option_defaults() == OptionDefaults(ocr=False)
 
 
 # --- source guards -----------------------------------------------------------------

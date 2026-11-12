@@ -34,6 +34,9 @@ class LOPipelineResult:
     reports               report dicts, keys: lo_validation, document_topics,
                           topic_coverage, lo_relevance_to_segment, lo_faithfulness,
                           lo_processing_time, section_diagnostics
+    embeddings            vectors of the document topics and of the accepted LO (new ids)
+                          from the topic coverage, for the split into lessons (step 16);
+                          None when the coverage embedded nothing. Not serialized anywhere.
     """
 
     learning_objects: list[dict]
@@ -41,10 +44,33 @@ class LOPipelineResult:
     lo_id_map: dict[Any, int]
     language_info: dict[str, str]
     reports: dict[str, Any] = field(default_factory=dict)
+    embeddings: Optional["SectionEmbeddings"] = None
 
     @property
     def document_language(self) -> str:
         return self.language_info.get("language", "sk")
+
+
+@dataclass
+class SectionEmbeddings:
+    """Embeddings computed by the topic coverage, reused by the split into lessons."""
+
+    topics: list[str]
+    topic_vectors: list[list[float]]
+    section_vectors: dict[int, list[float]]  # accepted LO id (1..n) → vector of lo_to_text
+
+
+def section_embeddings(vectors: dict, lo_id_map: dict[Any, int]) -> Optional[SectionEmbeddings]:
+    """Vectors from analyze_topic_coverage with the LO ids renumbered (dropped LO left out)."""
+    if not vectors.get("topics"):
+        return None
+    return SectionEmbeddings(
+        topics=list(vectors["topics"]),
+        topic_vectors=vectors["topic_vectors"],
+        section_vectors={
+            lo_id_map[old]: vector for old, vector in vectors["section_vectors"].items() if old in lo_id_map
+        },
+    )
 
 
 def lo_page_sort_key(lo):
@@ -74,6 +100,7 @@ def _lo_evaluation_reports(
     """Topic coverage, relevance and faithfulness of the LO (step lo_evaluation)."""
     total = 2 + batch_count(len(los), batch_size)
     report_progress(progress_callback, STAGE_LO_EVALUATION, 0, total)
+    vectors: dict = {}
     coverage_report = analyze_topic_coverage(
         segmenty,
         los,
@@ -85,6 +112,7 @@ def _lo_evaluation_reports(
         verbose=verbose,
         source_max_chars=settings.topic_source_max_chars,
         settings=settings,
+        vectors=vectors,
     )
     report_progress(progress_callback, STAGE_LO_EVALUATION, 1, total)
     relevance_report = analyze_lo_relevance_to_segment(
@@ -113,7 +141,7 @@ def _lo_evaluation_reports(
     )
     done = 2 + faithfulness_progress.sub_total
     report_progress(progress_callback, STAGE_LO_EVALUATION, done, done)
-    return coverage_report, relevance_report, faithfulness_report
+    return coverage_report, relevance_report, faithfulness_report, vectors
 
 
 def generate_lo_pipeline(
@@ -230,7 +258,7 @@ def generate_lo_pipeline(
     allowed_pages = build_allowed_source_refs(segmenty)
     evaluation_start = time.perf_counter()
     validation_report = validate_learning_objects(los, allowed_pages=allowed_pages)
-    coverage_report, relevance_report, faithfulness_report = _lo_evaluation_reports(
+    coverage_report, relevance_report, faithfulness_report, vectors = _lo_evaluation_reports(
         segmenty, los, llm, embedder, verbose, settings, batch_size, document_language, progress_callback
     )
     accepted_los = filter_learning_objects_variant_b(
@@ -281,6 +309,7 @@ def generate_lo_pipeline(
             "lo_processing_time": timing_report,
             "section_diagnostics": section_diagnostics(sections_generated, len(los), len(normalized_los)),
         },
+        embeddings=section_embeddings(vectors, lo_id_map),
     )
 
 

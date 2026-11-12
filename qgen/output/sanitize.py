@@ -15,7 +15,7 @@ DROPPED_CONTENT_TAGS = frozenset({"script", "style"})
 
 _TAG = re.compile(r"<[^>]*>")
 
-__all__ = ["DROPPED_CONTENT_TAGS", "HINT_TAGS", "clean_hint_html", "has_visible_text"]
+__all__ = ["DROPPED_CONTENT_TAGS", "HINT_TAGS", "clean_hint_html", "has_visible_text", "plain_text"]
 
 
 def clean_hint_html(text: str) -> str:
@@ -31,3 +31,10 @@ def clean_hint_html(text: str) -> str:
 def has_visible_text(cleaned_html: str) -> bool:
     """True if the (already cleaned) HTML has some text besides tags and whitespace."""
     return bool(html.unescape(_TAG.sub(" ", cleaned_html)).strip())
+
+
+def plain_text(text: str) -> str:
+    """Text without any HTML (lesson title / description from the LLM): every tag removed,
+    script/style content dropped, entities decoded, whitespace collapsed."""
+    cleaned = nh3.clean(text, tags=set(), clean_content_tags=set(DROPPED_CONTENT_TAGS), attributes={}, link_rel=None)
+    return " ".join(html.unescape(cleaned).split())

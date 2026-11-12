@@ -109,3 +109,59 @@ def test_lock_timeout(store, tmp_path):
         thread.join()
     assert len(result) == 1 and isinstance(result[0], TimeoutError)
     assert impatient.get(job.job_id).attempts == 0
+
+
+# --- replace on Windows (PermissionError from an outside handle, e.g. a virus scanner) -------
+
+
+def test_replace_retries_permission_error_on_windows(tmp_path, monkeypatch):
+    from service.jobs import store as store_module
+
+    source, target = tmp_path / "new", tmp_path / "job.json"
+    source.write_text("new")
+    target.write_text("old")
+    real_replace = store_module.os.replace
+    failures = iter([PermissionError(13, "Access is denied"), PermissionError(13, "Access is denied")])
+
+    def flaky_replace(src, dst):
+        error = next(failures, None)
+        if error is not None:
+            raise error
+        real_replace(src, dst)
+
+    waits = []
+    monkeypatch.setattr(store_module, "RETRY_REPLACE", True)
+    monkeypatch.setattr(store_module.os, "replace", flaky_replace)
+    store_module.replace_file(source, target, sleep=waits.append)
+    assert target.read_text() == "new"
+    assert waits == [0.01, 0.02]
+
+
+def test_replace_gives_up_after_the_last_attempt(tmp_path, monkeypatch):
+    from service.jobs import store as store_module
+
+    def always_denied(src, dst):
+        raise PermissionError(13, "Access is denied")
+
+    waits = []
+    monkeypatch.setattr(store_module, "RETRY_REPLACE", True)
+    monkeypatch.setattr(store_module.os, "replace", always_denied)
+    with pytest.raises(PermissionError):
+        store_module.replace_file(tmp_path / "a", tmp_path / "b", sleep=waits.append)
+    assert len(waits) == store_module.REPLACE_ATTEMPTS - 1
+
+
+def test_replace_does_not_retry_outside_windows(tmp_path, monkeypatch):
+    from service.jobs import store as store_module
+
+    calls = []
+
+    def denied(src, dst):
+        calls.append(src)
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(store_module, "RETRY_REPLACE", False)  # Linux
+    monkeypatch.setattr(store_module.os, "replace", denied)
+    with pytest.raises(PermissionError):
+        store_module.replace_file(tmp_path / "a", tmp_path / "b", sleep=lambda _s: None)
+    assert len(calls) == 1

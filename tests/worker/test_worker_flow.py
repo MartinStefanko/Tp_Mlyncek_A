@@ -12,7 +12,7 @@ import pytest
 from qgen.contract import Report, UnitsResult
 from qgen.contract.schemas import build_schema
 from qgen.extraction.text_extraction import OcrUnavailableError, pdfs_to_text
-from qgen.progress import PIPELINE_STAGES
+from service.jobs.runner import STAGE_ORDER
 from tests.baseline_data import (
     baseline_models,
     baseline_question_settings,
@@ -22,7 +22,7 @@ from tests.baseline_data import (
 )
 from service import worker as worker_main
 from service.jobs import runner
-from tests.fakes import FakeLLM, client_error
+from tests.fakes import FakeLLM, TitlesLLM, client_error
 from tests.worker.conftest import EKO_PDF, HEADERS, SEGMENTS, fixed_extraction, scripted_answer
 
 SK = {"external_ref": "gen-1", "language": "sk"}
@@ -68,7 +68,20 @@ def test_post_worker_completed_result_and_report(env):
     assert (meta.unit, meta.question, meta.section_id, meta.bloom_level) == (0, 0, "S-1", "understand")
     assert meta.source[0].file == "bio.pdf" and meta.source[0].pages == [1]
     assert report.quality.section_faithfulness_avg == 1.0
-    assert {"extract", "learning_objects", "questions", "output"} <= set(report.timings)
+    assert {"extract", "learning_objects", "questions", "split", "output"} <= set(report.timings)
+    # mode single (default): title of the one lesson from the LLM (step 16)
+    assert units.units[0].title == "Hodina 1 – názov"
+
+
+def test_split_options_reach_the_output(env):
+    """options.split goes to the output step: lessons with lesson_count 2 → 2 units."""
+    job_id = env.create({**SK, "split": {"mode": "lessons", "lesson_count": 2}})
+    env.work()
+    assert env.status(job_id)["status"] == "completed", env.status(job_id)
+    units, report = _result_and_report(env, job_id)
+    assert [u.title for u in units.units] == ["Hodina 1 – názov", "Hodina 2 – názov"]
+    assert sum(len(u.questions) for u in units.units) == 9
+    assert {m.unit for m in report.question_meta} == {0, 1}
 
 
 def test_progress_is_written_to_job_json(env):
@@ -87,7 +100,8 @@ def test_progress_is_written_to_job_json(env):
     stages = [stage for stage, _ in running]
     assert stages[0] == "extract"
     assert "questions" in stages and "q_evaluation" in stages
-    order = [(*PIPELINE_STAGES, "output").index(stage) for stage in stages]
+    assert "split" in stages and "output" in stages  # step 16: split, also in mode single
+    order = [STAGE_ORDER.index(stage) for stage in stages]
     assert order == sorted(order)  # the step only moves forward
     progresses = [progress for _, progress in running]
     assert progresses == sorted(progresses) and max(progresses) < 1.0
@@ -142,7 +156,9 @@ def test_replay_eko_completed(env_factory):
     # models and question settings of the recording (dedup threshold 0.95, code default 0.94)
     env = env_factory(**baseline_models(), **baseline_question_settings())
     replay = replay_client()
-    env.use(llm=replay, embedder=replay, extract=fixed_extraction(load_json("segments.json")))
+    # The lesson title (step 16) is not in baseline_v5: a fake answers it, the rest is
+    # replayed (the titles are checked by tests/output/test_split_replay.py).
+    env.use(llm=TitlesLLM(replay), embedder=replay, extract=fixed_extraction(load_json("segments.json")))
     job_id = env.create({"external_ref": "eko-1"}, pdf=EKO_PDF.read_bytes(), name="eko.pdf")
     env.work()
     assert env.status(job_id)["status"] == "completed", env.status(job_id)

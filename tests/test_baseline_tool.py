@@ -63,7 +63,11 @@ def test_reference_baseline_is_detected(baseline, tmp_path):
     assert not baseline.is_reference_baseline(tmp_path)
 
 
-@pytest.mark.parametrize("folder", ["baseline", "baseline_v3", "baseline_v4", "baseline_v5"])
+@pytest.mark.parametrize(
+    "folder",
+    ["baseline", "baseline_v3", "baseline_v4", "baseline_v5", "baseline_v5_single", "baseline_v5_topics",
+     "baseline_v5_lessons3", "baseline_v5_syllabus_text"],
+)
 def test_out_protected_recording_is_refused_without_force(baseline, capsys, folder):
     with pytest.raises(SystemExit) as info:
         baseline.main([str(REPO / "tests" / "fixtures" / "eko.pdf"), "--out", str(REPO / folder)])
@@ -120,3 +124,39 @@ def test_metrics_contain_the_run_info(baseline, tmp_path):
     # Same keys as baseline_v5/metrics.json, with the models actually used.
     assert metrics["models"]["lo_generation"] == "base" and metrics["models"]["item_evaluation"] == "ev"
     assert metrics["models"]["lo_batch_size"] == 10
+
+
+# --- --split / --base (step 16) -----------------------------------------------------------------
+
+
+def test_base_needs_split(baseline, tmp_path):
+    with pytest.raises(SystemExit):
+        baseline.main([str(REPO / "tests" / "fixtures" / "eko.pdf"), "--base", "baseline_v5", "--out", str(tmp_path)])
+
+
+def test_base_run_records_only_the_split_calls(baseline, monkeypatch, tmp_path):
+    """--base baseline_v5: the pipeline is replayed, only the lesson titles call the (fake)
+    API and land in llm_calls.jsonl; units.json, report.json and metrics.json are written."""
+    import json
+
+    from tests.baseline_data import BASELINE_DIR, require_baseline
+    from tests.fakes import FakeEmbedder, FakeLLM, check_answer
+
+    require_baseline()
+    fake = FakeLLM(default=lambda prompt, model: check_answer(prompt) or '{"items": []}')
+    monkeypatch.setattr(baseline, "get_settings", lambda: Settings.model_construct())
+    monkeypatch.setattr(baseline.llm_factory, "check_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(baseline.llm_factory, "get_llm", lambda role, settings: fake)
+    monkeypatch.setattr(baseline.llm_factory, "get_embedder", lambda settings: FakeEmbedder())
+    out = tmp_path / "split"
+    code = baseline.main([str(REPO / "tests" / "fixtures" / "eko.pdf"), "--base", str(BASELINE_DIR),
+                          "--split", '{"mode": "lessons", "lesson_count": 3}', "--out", str(out)])
+    assert code == 0
+    metrics = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["base"]["dir"] == "baseline_v5" and metrics["base"]["unused_base_calls"] == 0
+    assert metrics["split"]["options"]["lesson_count"] == 3 and metrics["split"]["lessons"] == 3
+    assert metrics["llm_calls"]["by_method"] == {"generate_content": 1}
+    assert len((out / "llm_calls.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+    units = json.loads((out / "units.json").read_text(encoding="utf-8"))
+    assert [u["title"] for u in units["units"]] == ["Hodina 1 – názov", "Hodina 2 – názov", "Hodina 3 – názov"]
+    assert (out / "report.json").is_file()

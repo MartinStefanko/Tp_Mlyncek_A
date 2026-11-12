@@ -4,6 +4,7 @@ from qgen.config import Settings
 from qgen.lo.pipeline import LOPipelineResult
 from qgen.output import build_output
 from qgen.pipeline import PipelineResult
+from tests.fakes import FakeEmbedder, FakeLLM, TitlesLLM
 
 
 def settings(**values) -> Settings:
@@ -32,12 +33,19 @@ def result(sections, questions, reports=None, language="sk") -> PipelineResult:
     return PipelineResult(learning_objects=sections, questions=questions, reports=reports or {}, lo_result=lo_result)
 
 
-def build(sections, questions, *, names=("a.pdf",), reports=None, language="sk", llm=None, timings=None, **kwargs):
+def build(sections, questions, *, names=("a.pdf",), reports=None, language="sk", llm=None, timings=None,
+          titles=True, embeddings=None, **kwargs):
+    """build_output on a fake pipeline result. `llm` gets every call except the lesson
+    titles, which TitlesLLM answers (titles=False: `llm` gets those too)."""
+    llm = llm if llm is not None else FakeLLM()
+    pipeline_result = result(sections, questions, reports, language)
+    pipeline_result.lo_result.embeddings = embeddings
     return build_output(
-        result(sections, questions, reports, language),
+        pipeline_result,
         input_names=list(names),
         timings=timings if timings is not None else {},
         settings=kwargs.pop("settings", None) or settings(),
-        llm=llm,
+        llm=TitlesLLM(llm) if titles else llm,
+        embedder=kwargs.pop("embedder", None) or FakeEmbedder(),
         **kwargs,
     )

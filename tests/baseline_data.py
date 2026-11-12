@@ -106,3 +106,32 @@ def baseline_settings() -> Settings:
     .env or QGEN_* variables must not change a replay run."""
     return Settings.model_construct(**baseline_models(), **baseline_question_settings(),
                                     **baseline_concurrency())
+
+
+# --- split into lessons (step 16): short recordings on top of baseline_v5 -------------------
+# tools/baseline.py --base baseline_v5 --split JSON records only the calls of the split and
+# output steps (lesson titles, syllabus plan, syllabus embeddings). Replay = baseline_v5 +
+# the short recording. Only metrics.json of each is in git.
+
+SPLIT_RECORDINGS = ("baseline_v5_single", "baseline_v5_topics", "baseline_v5_lessons3", "baseline_v5_syllabus_text")
+SPLIT_REQUIRED_FILES = ("llm_calls.jsonl", "units.json", "report.json", "metrics.json")
+
+
+def split_dir(name: str) -> Path:
+    return BASELINE_DIR.parent / name
+
+
+def require_split_recording(name: str) -> None:
+    require_baseline()
+    missing = [f for f in SPLIT_REQUIRED_FILES if not (split_dir(name) / f).is_file()]
+    if missing:
+        pytest.skip(f"Split recording {name} is missing locally: {', '.join(missing)}")
+
+
+def load_split_json(name: str, file_name: str):
+    return json.loads((split_dir(name) / file_name).read_text(encoding="utf-8"))
+
+
+def split_replay_client(name: str) -> ReplayClient:
+    """baseline_v5 and the split recording `name` joined (recording index 1 = the split one)."""
+    return ReplayClient([BASELINE_DIR / "llm_calls.jsonl", split_dir(name) / "llm_calls.jsonl"])

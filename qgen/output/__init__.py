@@ -1,23 +1,32 @@
-"""Output step: pipeline result → units (to ECEH) + report (internal diagnostics), step 14.
+"""Output step: pipeline result → units (to ECEH) + report (internal diagnostics), steps 14 and 16.
 
     build_output   the whole step (below)
     check_output   check before saving (models, JSON Schemas, report ↔ units), used by the worker
 
-Modules: units (mapping of the questions, unit title / description), limits (ECEH length
-limits, shortening by the LLM, field_too_long), sanitize (hint HTML, nh3), report (report
-in the unchanged shape), check. Nothing here imports from service/.
+Modules: split (split into lessons: topics, syllabus plan, lesson titles by the LLM), units
+(mapping of the questions), limits (ECEH length limits, shortening by the LLM,
+field_too_long), sanitize (hint HTML, nh3), report (report in the unchanged shape), check.
+Nothing here imports from service/.
 
-build_output, for every question of the pipeline (position = its 1-based order there):
+build_output:
+    split (stage "split"): lessons, order of the questions, title and description of every
+       lesson (qgen.output.split; also mode single gets its title from the LLM)
+    then for every question of the pipeline (position = its 1-based order there):
     1. draft of the contract fields, hint HTML cleaned (invalid_hint)
     2. too long name / description / choices: one LLM call per question (shortening_failed)
     3. name cut at a word end; another field still too long → left out (field_too_long)
     4. contract Question; any other problem → left out (invalid_question)
-    5. question_meta of the accepted questions; the report
-Warnings of one question stay together, in the order of the questions.
+    5. units by lessons, questions in the order of the split; questions of sections the
+       syllabus left out are in no unit and have no question_meta; a lesson without an
+       accepted question is left out (empty_lesson); no lesson at all → one empty unit
+       (no_questions, the last warning), as the contract needs at least one
+Warnings in the report: pipeline diagnostics, split warnings, then the warnings of the
+questions (those of one question together, in the order of the questions).
 """
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -25,14 +34,16 @@ from pydantic import ValidationError
 
 from qgen.cli import normalize_lo_for_export
 from qgen.config import Settings
+from qgen.contract.options import SingleSplit, SplitOptions
 from qgen.contract.report import QuestionMeta, Report, ReportWarning
 from qgen.contract.units import Question, Unit, UnitsResult
-from qgen.llm.base import LLMClient
+from qgen.llm.base import EmbeddingClient, LLMClient
 from qgen.output.check import OutputCheckError, check_output
 from qgen.output.limits import cut_at_word, enforce_limits, shorten_questions
 from qgen.output.report import build_report, question_meta, topics_by_section
 from qgen.output.sanitize import clean_hint_html
-from qgen.output.units import question_draft, unit_description, unit_title
+from qgen.output.split import run_split
+from qgen.output.units import question_draft, unit_title
 
 __all__ = [
     "OutputCheckError",
@@ -57,16 +68,35 @@ def build_output(
     input_names: list[str],
     timings: dict[str, float],
     settings: Settings,
+    split: Optional[SplitOptions] = None,
     llm: Optional[LLMClient] = None,
+    embedder: Optional[EmbeddingClient] = None,
     progress_callback: Optional[Callable[[str, int, int], None]] = None,
 ) -> OutputResult:
     """`pipeline_result`: qgen.pipeline.PipelineResult; `input_names`: original names of the
-    input PDFs in upload order (D1, D2, …); `llm`: client for the shortening (None = factory)."""
+    input PDFs in upload order (D1, D2, …); `split`: options.split (None = single);
+    `llm` / `embedder`: clients for the split and the shortening (None = factory)."""
     sections = [normalize_lo_for_export(lo) for lo in pipeline_result.learning_objects]
     by_id = {lo["id"]: lo for lo in sections}
-    topics = topics_by_section(pipeline_result.reports)
     file_names = {f"D{i}": name for i, name in enumerate(input_names, start=1)}
     language = _language(pipeline_result)
+
+    split_start = time.perf_counter()
+    outcome = run_split(
+        pipeline_result,
+        sections=sections,
+        split=split or SingleSplit(),
+        input_names=input_names,
+        language=language,
+        settings=settings,
+        llm=llm,
+        embedder=embedder,
+        progress_callback=progress_callback,
+    )
+    split_seconds = time.perf_counter() - split_start
+    topics = outcome.section_topics or topics_by_section(pipeline_result.reports)
+    if progress_callback is not None:
+        progress_callback("output", 0, 1)
 
     warnings: dict[int, list[ReportWarning]] = {}
     items = list(enumerate(pipeline_result.questions, start=1))
@@ -85,34 +115,60 @@ def build_output(
             ReportWarning(code="shortening_failed", message=f"Question {position}: shortening by the LLM failed (llm_error).")
         )
 
-    questions: list[Question] = []
-    meta: list[QuestionMeta] = []
+    accepted: dict[int, Question] = {}
     dropped = 0
-    for (position, item), draft in zip(items, drafts):
+    for (position, _item), draft in zip(items, drafts):
         problem = _accept(draft, position)
         if isinstance(problem, ReportWarning):
             dropped += 1
             warnings[position].append(problem)
-            continue
-        section = by_id.get(item.get("lo_id"))
-        meta.append(
-            question_meta(
-                item, section, unit=0, question=len(questions), position=position,
-                file_names=file_names, topics=topics, warnings=warnings[position],
-            )
-        )
-        questions.append(problem)
+        else:
+            accepted[position - 1] = problem
 
-    unit = Unit(title=unit_title(input_names), description=unit_description(sections), questions=questions)
+    units: list[Unit] = []
+    meta: list[QuestionMeta] = []
+    split_warnings = list(outcome.warnings)
+    for number, (order, text) in enumerate(zip(outcome.question_order, outcome.texts), start=1):
+        questions: list[Question] = []
+        for index in order:
+            if index not in accepted:
+                continue
+            position, item = items[index]
+            meta.append(
+                question_meta(
+                    item, by_id.get(item.get("lo_id")), unit=len(units), question=len(questions),
+                    position=position, file_names=file_names, topics=topics, warnings=warnings[position],
+                )
+            )
+            questions.append(accepted[index])
+        if not questions:
+            split_warnings.append(
+                ReportWarning(code="empty_lesson", message=f"Lesson {number} has no accepted question; it is left out.")
+            )
+            continue
+        units.append(Unit(title=text.title, description=text.description, questions=questions))
+    closing: list[ReportWarning] = []
+    if not units:
+        # One empty unit (the contract needs one); the empty lessons need no warning of their own.
+        split_warnings = [w for w in split_warnings if w.code != "empty_lesson"]
+        closing.append(
+            ReportWarning(code="no_questions", message="No question was accepted; the result has one empty unit.")
+        )
+        units.append(Unit(title=unit_title(input_names), description="", questions=[]))
+
     report = build_report(
         sections,
         meta,
         reports=pipeline_result.reports,
         topics=topics,
-        warnings=[warning for position, _ in items for warning in warnings[position]],
-        timings=timings,
+        warnings=[
+            *split_warnings,
+            *(warning for position, _ in items for warning in warnings[position]),
+            *closing,
+        ],
+        timings={**timings, "split": round(split_seconds, 4)},
     )
-    return OutputResult(result=UnitsResult(units=[unit]), report=report, dropped=dropped)
+    return OutputResult(result=UnitsResult(units=units), report=report, dropped=dropped)
 
 
 def _accept(draft: dict, position: int) -> Question | ReportWarning:

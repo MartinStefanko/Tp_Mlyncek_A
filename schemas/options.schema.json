@@ -32,24 +32,16 @@
           "type": "string"
         },
         "lesson_count": {
-          "anyOf": [
-            {
-              "description": "Number of lessons.",
-              "maximum": 100,
-              "minimum": 1,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Lesson Count"
+          "description": "Number of lessons.",
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Lesson Count",
+          "type": "integer"
         },
         "lesson_minutes": {
           "anyOf": [
             {
-              "description": "Lesson length in minutes.",
+              "description": "Lesson length in minutes. Ignored: the number of lessons does not come from the time of the questions (they are a pool the teacher picks from); kept for compatibility (Príloha A).",
               "maximum": 240,
               "minimum": 5,
               "type": "integer"
@@ -73,7 +65,8 @@
         }
       },
       "required": [
-        "mode"
+        "mode",
+        "lesson_count"
       ],
       "title": "LessonsSplit",
       "type": "object"
@@ -169,7 +162,7 @@
         "lesson_minutes": {
           "anyOf": [
             {
-              "description": "Lesson length in minutes.",
+              "description": "Lesson length in minutes. Ignored: the number of lessons does not come from the time of the questions (they are a pool the teacher picks from); kept for compatibility (Príloha A).",
               "maximum": 240,
               "minimum": 5,
               "type": "integer"
@@ -254,7 +247,7 @@
         "lesson_minutes": {
           "anyOf": [
             {
-              "description": "Lesson length in minutes.",
+              "description": "Lesson length in minutes. Ignored: the number of lessons does not come from the time of the questions (they are a pool the teacher picks from); kept for compatibility (Príloha A).",
               "maximum": 240,
               "minimum": 5,
               "type": "integer"
@@ -321,7 +314,7 @@
         "lesson_minutes": {
           "anyOf": [
             {
-              "description": "Lesson length in minutes.",
+              "description": "Lesson length in minutes. Ignored: the number of lessons does not come from the time of the questions (they are a pool the teacher picks from); kept for compatibility (Príloha A).",
               "maximum": 240,
               "minimum": 5,
               "type": "integer"

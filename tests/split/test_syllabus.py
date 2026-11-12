@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from qgen.contract.options import SyllabusLesson
 from qgen.split import PlannedLesson, SplitQuestion, SyllabusPlan, order_questions, plan_from_syllabus, split_lessons
 
-from .helpers import chain, codes, ids, section, syllabus, syllabus_text
+from .helpers import chain, codes, ids, section, syllabus, syllabus_text, topical
 
 
 def lesson(title, pages=None, description=None):
@@ -34,7 +34,7 @@ def test_assignment_by_pages():
 
 def test_without_pages_only_similarity():
     sim = [[0.9, 0.1], [0.2, 0.8], [0.7, 0.3], [0.4, 0.6], [0.1, 0.9], [0.5, 0.5]]
-    result = split_lessons(SIX, syllabus(lesson("A"), lesson("B")), similarity=sim)
+    result = split_lessons(SIX, syllabus(lesson("A"), lesson("B")), syllabus_similarity=sim)
     assert ids(result) == [[1, 3, 6], [2, 4, 5]]  # 6: tie → earlier lesson
     # Chain 1 → 2 → … : 3 in lesson 1 needs 2 from lesson 2.
     assert set(codes(result)) == {"prerequisite_order"}
@@ -43,15 +43,15 @@ def test_without_pages_only_similarity():
 def test_page_tie_decided_by_similarity():
     sections = [section(1, 10, page=5)]
     split = syllabus(lesson("A", "D1:1-5"), lesson("B", "D1:5-9"))
-    assert ids(split_lessons(sections, split, similarity=[[0.2, 0.7]])) == [[1]]
-    assert split_lessons(sections, split, similarity=[[0.2, 0.7]]).lessons[0].syllabus_index == 1
+    assert ids(split_lessons(sections, split, syllabus_similarity=[[0.2, 0.7]])) == [[1]]
+    assert split_lessons(sections, split, syllabus_similarity=[[0.2, 0.7]]).lessons[0].syllabus_index == 1
     assert split_lessons(sections, split).lessons[0].syllabus_index == 0  # no matrix → earlier
 
 
 def test_section_outside_pages_uses_similarity():
     sections = [section(1, 10, page=2), section(2, 10, page=40)]
     split = syllabus(lesson("A", "D1:1-5"), lesson("B", "D1:6-9"))
-    result = split_lessons(sections, split, similarity=[[0.5, 0.1], [0.1, 0.6]])
+    result = split_lessons(sections, split, syllabus_similarity=[[0.5, 0.1], [0.1, 0.6]])
     assert ids(result) == [[1], [2]]
 
 
@@ -66,21 +66,21 @@ def test_missing_or_wrong_similarity_is_a_caller_error():
     with pytest.raises(ValueError):
         split_lessons(SIX, split)
     with pytest.raises(ValueError):
-        split_lessons(SIX, split, similarity=[[0.1, 0.2]] * 5)
+        split_lessons(SIX, split, syllabus_similarity=[[0.1, 0.2]] * 5)
     with pytest.raises(ValueError):
-        split_lessons(SIX, split, similarity=[[0.1]] * 6)
+        split_lessons(SIX, split, syllabus_similarity=[[0.1]] * 6)
 
 
 def test_empty_syllabus_lesson_is_left_out():
     result = split_lessons(SIX, syllabus(lesson("A", "D1:1-6"), lesson("B", "D1:50-60"), lesson("C", "D1:6")))
     assert ids(result) == [[1, 2, 3, 4, 5, 6]]  # 6: tie (D1:1-6, D1:6) → earlier lesson
     assert [x.syllabus_index for x in result.lessons] == [0]
-    assert codes(result) == ["empty_lesson", "empty_lesson", "lesson_over_capacity"]
+    assert codes(result) == ["empty_lesson", "empty_lesson"]
 
 
-def test_over_capacity_only_reported():
-    result = split_lessons(chain([30, 30]), syllabus(lesson("A", "D1:1-2")))
-    assert codes(result) == ["lesson_over_capacity"]
+def test_long_lesson_is_not_reported():
+    result = split_lessons(chain([300, 300]), syllabus(lesson("A", "D1:1-2")))
+    assert result.warnings == []
 
 
 def test_prerequisite_conflict_keeps_teachers_order():
@@ -147,7 +147,7 @@ def test_unmentioned_sections_by_pages_or_similarity():
     # Lesson A by ids, lesson B by pages; 3 is not mentioned and its page is in no range.
     plan = SyllabusPlan(lessons=[planned("A", section_ids=[1, 2]), planned("B", pages="D1:4-6")])
     sim = [[0.0, 0.0], [0.0, 0.0], [0.9, 0.1], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
-    result = split_lessons(SIX, syllabus_text(), similarity=sim, plan=plan)
+    result = split_lessons(SIX, syllabus_text(), syllabus_similarity=sim, plan=plan)
     assert ids(result) == [[1, 2, 3], [4, 5, 6]]
     assert result.warnings == []
 
@@ -163,13 +163,14 @@ def test_everything_skipped_falls_back_to_topics():
     result = split_lessons(SIX, syllabus_text(), plan=plan)
     assert result.fallback == "topics"
     assert result.skipped_section_ids == []
-    assert ids(result) == [[1, 2, 3, 4, 5, 6]]  # no topics → one run, 60 min → 1 lesson
-    assert "syllabus_fallback" in codes(result)
+    assert ids(result) == [[1, 2, 3, 4, 5, 6]]  # no topics → one lesson
+    assert codes(result) == ["syllabus_fallback", "no_document_topics"]
 
 
 def test_text_without_plan_falls_back_to_topics():
-    result = split_lessons(chain([20, 20, 20, 20], topics=list("AABB")), syllabus_text())
+    result = split_lessons(chain([20, 20, 20, 20]), syllabus_text(), **topical(list("AABB")))
     assert result.fallback == "topics"
+    assert result.plan is None
     assert ids(result) == [[1, 2], [3, 4]]
     assert codes(result) == ["syllabus_fallback"]
 
@@ -185,11 +186,21 @@ def test_plan_with_lesson_count_runs_lessons():
     assert all(x.syllabus_index is None for x in result.lessons)
 
 
-def test_plan_with_lesson_minutes_runs_lessons():
-    plan = SyllabusPlan(lesson_minutes=90)
-    result = split_lessons(chain([15] * 12), syllabus_text("hodiny po 90 minút"), plan=plan)
-    assert ids(result) == [[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12]]
-    assert result.warnings == []
+def test_plan_with_only_lesson_minutes_splits_by_topics():
+    plan = SyllabusPlan(lesson_minutes=90, skipped_section_ids=[4])
+    result = split_lessons(chain([20] * 4), syllabus_text("hodiny po 90 minút"), plan=plan, **topical(list("AABB")))
+    assert ids(result) == [[1, 2], [3]]
+    assert result.skipped_section_ids == [4]
+    assert codes(result) == ["syllabus_lesson_minutes_ignored", "syllabus_skipped_sections"]
+    assert "(lessons split by topics)" in result.warnings[0].message
+
+
+def test_plan_lessons_with_minutes_ignores_minutes():
+    plan = SyllabusPlan(lessons=[planned("A", section_ids=[1, 2, 3, 4, 5, 6])], lesson_minutes=90)
+    result = split_lessons(SIX, syllabus_text(), plan=plan)
+    assert ids(result) == [[1, 2, 3, 4, 5, 6]]
+    assert codes(result) == ["syllabus_lesson_minutes_ignored"]
+    assert result.plan is plan
 
 
 # --- plan models ---------------------------------------------------------------------------------------

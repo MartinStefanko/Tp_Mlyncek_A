@@ -15,14 +15,24 @@ settings. Thresholds, batch sizes and attempts stay at the code defaults (= app.
 so .env cannot change them. Before the run the tool prints the model of every role and
 calls factory.check_config().
 
-Protected recordings: baseline_v5/ (reference of the replay tests, commit dff7c00),
+Split into lessons (step 16): --split JSON (options.split) also runs the output step
+(qgen.output.build_output: lessons, their titles by the LLM, units) and writes units.json and
+report.json. With --base DIR the pipeline is not called at all: it is replayed from the
+recording DIR (its segments.json, models and question settings from its metrics.json), and
+only the calls of the split and output steps go to the API and into llm_calls.jsonl. Such a
+short recording works on top of DIR (replay tests join both recordings).
+
+Protected recordings: baseline_v5/ (reference of the replay tests, commit dff7c00), the
+split recordings on top of it (baseline_v5_single/, _topics/, _lessons3/, _syllabus_text/),
 baseline_v4/ (step 13, prompts with hints), baseline_v3/ (old question format) and baseline/
 (gemini-2.5), historical records. --out pointing at one of them is refused unless
 --force is given.
 
 Usage (from the repo root):
     venv/Scripts/python.exe tools/baseline.py tests/fixtures/eko.pdf [more.pdf ...] --out baseline_v2
-        [--app-models] [--force]
+        [--app-models] [--force] [--split '{"mode": "topics"}']
+    venv/Scripts/python.exe tools/baseline.py tests/fixtures/eko.pdf --base baseline_v5
+        --split '{"mode": "topics"}' --out baseline_v5_topics
 
 Outputs in --out:
     llm_calls.jsonl                    recording of all LLM and embedding calls
@@ -32,6 +42,9 @@ Outputs in --out:
     reports/                           the pipeline reports as text files
     metrics.json                       summary metrics taken from those reports, plus the
                                        models of every role, run date and git commit ("run")
+    units.json / report.json           with --split: result and report of the output step
+With --base only llm_calls.jsonl (split and output calls), units.json, report.json and
+metrics.json ("run", "base", "split", "llm_calls").
 """
 
 import argparse
@@ -53,7 +66,11 @@ from qgen.cli import save_learning_objects_json, save_questions_json, write_repo
 from qgen.config import Settings, get_settings  # noqa: E402
 from qgen.llm.errors import LLMConfigError  # noqa: E402
 from qgen.extraction.text_extraction import pdfs_to_text  # noqa: E402
+from qgen.cli import parse_split  # noqa: E402
+from qgen.llm.adapters.replay import ReplayClient  # noqa: E402
 from qgen.lo.pipeline import generate_lo_pipeline  # noqa: E402
+from qgen.output import build_output  # noqa: E402
+from qgen.pipeline import PipelineResult  # noqa: E402
 from qgen.questions.pipeline import generate_all_items  # noqa: E402
 from recording_client import RecordingClient  # noqa: E402
 
@@ -72,8 +89,12 @@ LO_BATCH_SIZE = 10
 ITEM_BATCH_SIZE = 3  # sections per question generation call (QGEN_QUESTION_GENERATION_BATCH_SIZE, step 13)
 # Recordings that must not be overwritten by accident: the reference of the replay tests
 # (baseline_v5/) and the historical records (baseline_v4/, baseline_v3/, gemini-2.5 baseline/).
+# Short recordings of the split step on top of baseline_v5 (--base), references of the
+# split replay tests (tests/output/test_split_replay.py).
+SPLIT_RECORDINGS = ("baseline_v5_single", "baseline_v5_topics", "baseline_v5_lessons3", "baseline_v5_syllabus_text")
 PROTECTED_BASELINE_DIRS = (
     REPO_ROOT / "baseline_v5",
+    *(REPO_ROOT / name for name in SPLIT_RECORDINGS),
     REPO_ROOT / "baseline_v4",
     REPO_ROOT / "baseline_v3",
     REPO_ROOT / "baseline",
@@ -270,6 +291,160 @@ def build_metrics(args, pdf_paths, reports, lo_report, item_report, los, items, 
     }
 
 
+# --- split into lessons (step 16) ------------------------------------------------------------
+
+
+def base_settings(base_metrics: dict) -> dict:
+    """Models, question settings and concurrency of a recording (its metrics.json), by Settings
+    field, so the replayed pipeline runs exactly as recorded."""
+    roles = base_metrics["run"]["models_by_role"]
+    recorded = base_metrics["questions"]["settings"]
+    return {
+        "llm_model": roles["check"],
+        "llm_model_lo": roles["lo"],
+        "llm_model_questions": roles["questions"],
+        "llm_model_eval": roles["eval"],
+        "embed_model": roles["embed"],
+        **recorded,
+        "llm_max_concurrency": base_metrics["run"]["llm_max_concurrency"],
+    }
+
+
+def run_pipeline_steps(segments, client, settings: Settings) -> PipelineResult:
+    """The LO and question pipeline as in the full run (same batch sizes)."""
+    lo_result = generate_lo_pipeline(
+        segments,
+        batch_size=LO_BATCH_SIZE,
+        generation_model=settings.llm_model_lo,
+        prerequisites_model=settings.llm_model_lo,
+        llm=client,
+        embedder=client,
+        verbose=True,
+        settings=settings,
+    )
+    item_result = None
+    if lo_result.learning_objects:
+        item_result = generate_all_items(
+            lo_result.learning_objects,
+            segments,
+            batch_size=ITEM_BATCH_SIZE,
+            evaluation_batch_size=ITEM_EVALUATION_BATCH_SIZE,
+            generation_model=settings.llm_model_questions,
+            evaluation_model=settings.llm_model_eval,
+            llm=client,
+            embedder=client,
+            verbose=True,
+            settings=settings,
+        )
+    return PipelineResult(
+        learning_objects=lo_result.learning_objects,
+        questions=item_result.questions if item_result else [],
+        reports={**lo_result.reports, **(item_result.reports if item_result else {})},
+        lo_result=lo_result,
+        question_result=item_result,
+    )
+
+
+def run_output(pipeline_result, split, *, input_names, settings: Settings, client, out_dir: Path) -> dict:
+    """build_output with the recording client; writes units.json and report.json, returns the
+    "split" part of metrics.json."""
+    started = time.perf_counter()
+    output = build_output(
+        pipeline_result,
+        input_names=input_names,
+        timings={},
+        settings=settings,
+        split=split,
+        llm=client,
+        embedder=client,
+    )
+    seconds = time.perf_counter() - started
+    for name, model in (("units.json", output.result), ("report.json", output.report)):
+        with open(out_dir / name, "w", encoding="utf-8") as f:
+            json.dump(model.model_dump(mode="json"), f, ensure_ascii=False, indent=2)
+    units = output.result.units
+    meta = output.report.question_meta
+    return {
+        "options": split.model_dump(mode="json"),
+        "lessons": len(units),
+        "questions_per_lesson": [len(unit.questions) for unit in units],
+        "lesson_minutes": [
+            round(sum(q.time_to_handle + q.time_to_explain for q in unit.questions) / 60, 1) for unit in units
+        ],
+        "sections_per_lesson": [
+            sorted({m.section_id for m in meta if m.unit == index}, key=lambda x: int(x[2:]))
+            for index in range(len(units))
+        ],
+        "warnings": [w.code for w in output.report.warnings],
+        "dropped": output.dropped,
+        "output_seconds": round(seconds, 4),
+    }
+
+
+def main_on_base(args, split, parser) -> int:
+    """--base: pipeline replayed from the recording, only split + output call the API."""
+    base_dir = Path(args.base).resolve()
+    for name in ("llm_calls.jsonl", "segments.json", "metrics.json"):
+        if not (base_dir / name).is_file():
+            parser.error(f"--base {args.base}: {name} is missing")
+    base_metrics = json.loads((base_dir / "metrics.json").read_text(encoding="utf-8"))
+    recorded = base_settings(base_metrics)
+    settings = Settings.model_construct(**recorded)
+    run_settings = get_settings().model_copy(update=recorded)
+    print(f"Pipeline replayed from {base_dir.name}; split and output calls to {run_settings.llm_provider} "
+          f"/ {run_settings.embed_provider}:")
+    for role, model in models_by_role(settings).items():
+        print(f"  {role:<10} {model}")
+    try:
+        llm_factory.check_config(run_settings)
+    except LLMConfigError as error:
+        print(f"Configuration error: {error}", file=sys.stderr)
+        return 2
+    run = run_info(run_settings, "base", datetime.now(timezone.utc), git_version())
+
+    out_dir = Path(args.out).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    segments = json.loads((base_dir / "segments.json").read_text(encoding="utf-8"))
+    replay = ReplayClient(base_dir / "llm_calls.jsonl")
+    client = RecordingClient(
+        llm_factory.get_llm("lo", run_settings), llm_factory.get_embedder(run_settings), out_dir / "llm_calls.jsonl"
+    )
+    original_factory = install_client_guard()
+    try:
+        pipeline_result = run_pipeline_steps(segments, replay, settings)
+        unused = replay.unused_records()
+        if unused:
+            print(f"Warning: {len(unused)} recorded calls of {base_dir.name} were not used; "
+                  "the pipeline differs from the recording.", file=sys.stderr)
+        split_metrics = run_output(
+            pipeline_result, split, input_names=[i["name"] for i in base_metrics["inputs"]],
+            settings=settings, client=client, out_dir=out_dir,
+        )
+    finally:
+        llm_factory.get_llm = original_factory["get_llm"]
+        llm_factory.get_embedder = original_factory["get_embedder"]
+        client.close()
+
+    metrics = {
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "run": run,
+        "base": {
+            "dir": base_dir.name,
+            "git_commit": base_metrics["run"].get("git_commit"),
+            "inputs": base_metrics["inputs"],
+            "unused_base_calls": len(unused),
+        },
+        "split": split_metrics,
+        "llm_calls": {"by_method": dict(client.recorder.counts), "failed": client.recorder.errors},
+    }
+    with open(out_dir / "metrics.json", "w", encoding="utf-8") as f:
+        json.dump(metrics, f, ensure_ascii=False, indent=2)
+    print("\n=== SPLIT METRICS ===")
+    print(json.dumps(metrics, ensure_ascii=False, indent=2))
+    print(f"\nSaved to: {out_dir}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("pdfs", nargs="+", help="Input PDF file(s), e.g. tests/fixtures/eko.pdf")
@@ -278,14 +453,25 @@ def main(argv=None) -> int:
     parser.add_argument("--app-models", action="store_true",
                         help="Use the fixed models of the former app.py (Gemini 2.5) instead of the settings.")
     parser.add_argument("--force", action="store_true",
-                        help="Allow --out to be a protected recording (baseline/, baseline_v3/, baseline_v4/, baseline_v5/).")
+                        help="Allow --out to be a protected recording (baseline/, baseline_v3/ to baseline_v5/, "
+                             "baseline_v5_* split recordings).")
+    parser.add_argument("--split", type=parse_split, default=None, metavar="JSON",
+                        help="options.split as JSON; also runs the output step (units.json, report.json).")
+    parser.add_argument("--base", default=None, metavar="DIR",
+                        help="Replay the pipeline from this recording; record only the split and output calls "
+                             "(needs --split).")
     args = parser.parse_args(argv)
+    if args.base is not None and args.split is None:
+        parser.error("--base needs --split")
 
     if is_reference_baseline(Path(args.out)) and not args.force:
         parser.error(
             f"--out {args.out} is a protected recording (baseline_v5/ = reference of the replay tests, "
-            "baseline_v4/, baseline_v3/ and baseline/ = historical records); choose another folder (e.g. baseline_v6) or add --force."
+            "baseline_v5_* = split recordings, baseline_v4/, baseline_v3/ and baseline/ = historical records); "
+            "choose another folder (e.g. baseline_v6) or add --force."
         )
+    if args.base is not None:
+        return main_on_base(args, args.split, parser)
 
     pdf_paths = [str(Path(p).resolve()) for p in args.pdfs]
     for p in pdf_paths:
@@ -325,6 +511,7 @@ def main(argv=None) -> int:
     original_factory = install_client_guard()
 
     timings: dict = {}
+    split_metrics = None
     total_start = time.perf_counter()
     try:
         # 1) Extraction – same input shape as app.py ({"path", "name"}).
@@ -376,6 +563,18 @@ def main(argv=None) -> int:
             reports.update(item_result.reports)
             save_questions_json(items, str(out_dir), all_items=item_result.all_questions)
         write_reports(reports, reports_dir)
+        if args.split is not None:
+            pipeline_result = PipelineResult(
+                learning_objects=los,
+                questions=items,
+                reports=reports,
+                lo_result=lo_result,
+                question_result=item_result if los else None,
+            )
+            split_metrics = run_output(
+                pipeline_result, args.split, input_names=[i["name"] for i in pdf_inputs],
+                settings=settings, client=client, out_dir=out_dir,
+            )
         timings["total_wall"] = round(time.perf_counter() - total_start, 4)
     finally:
         llm_factory.get_llm = original_factory["get_llm"]
@@ -385,6 +584,8 @@ def main(argv=None) -> int:
     metrics = build_metrics(
         args, pdf_paths, reports, lo_report, item_report, los, items, timings, client.recorder, settings, run
     )
+    if split_metrics is not None:
+        metrics["split"] = split_metrics
     with open(out_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
 

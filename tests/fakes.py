@@ -108,8 +108,54 @@ def question(lo_id: int, n: int = 1, question_type: str = "choice", **fields) ->
     return row
 
 
+# --- split into lessons (step 16) ---------------------------------------------------------------
+
+TITLES_MARKERS = ("navrhni názov a krátky popis", "propose a title and a short description")
+PLAN_MARKERS = ("Preveď jeho text na štruktúrovaný plán", "Turn their text into a structured lesson plan")
+_LESSON_LINE = re.compile(r"^(?:Hodina|Lesson) (\d+)$", re.M)
+
+
+def is_titles_prompt(prompt: str) -> bool:
+    return any(marker in prompt for marker in TITLES_MARKERS)
+
+
+def is_plan_prompt(prompt: str) -> bool:
+    return any(marker in prompt for marker in PLAN_MARKERS)
+
+
+def lesson_numbers(prompt: str) -> list[int]:
+    return [int(n) for n in _LESSON_LINE.findall(prompt)]
+
+
+def lesson_titles(prompt: str, model: str = "") -> str:
+    """Answer of the lesson titles prompt: "Hodina N – názov" and a one-sentence description."""
+    return items(
+        {"lesson": n, "title": f"Hodina {n} – názov", "description": f"Popis hodiny {n}."}
+        for n in lesson_numbers(prompt)
+    )
+
+
+class TitlesLLM:
+    """Answers the lesson titles prompt itself (`title_calls`), every other prompt goes to
+    `inner`; so tests of other steps keep their scripted calls."""
+
+    def __init__(self, inner: Any, answer: Any = lesson_titles) -> None:
+        self.inner = inner
+        self.answer = answer
+        self.title_calls: list[str] = []
+
+    def generate(self, prompt: str, *, model: str, **kwargs: Any) -> LLMResponse:
+        if is_titles_prompt(prompt):
+            self.title_calls.append(prompt)
+            return LLMResponse(text=_resolve(self.answer, prompt, model), model=model, usage={})
+        return self.inner.generate(prompt, model=model, **kwargs)
+
+
 def check_answer(prompt: str, score: int = 5) -> Optional[str]:
-    """Answer of the section and question checks with `score`; None for other prompts."""
+    """Answer of the section and question checks with `score` (and of the lesson titles
+    prompt); None for other prompts."""
+    if is_titles_prompt(prompt):
+        return lesson_titles(prompt)
     if "Item id:" in prompt:  # question quality score
         ids = [int(x) for x in re.findall(r"Item id: (\d+)", prompt)]
         return items({"id": i, "skore": score, "zdovodnenie": "ok"} for i in ids)

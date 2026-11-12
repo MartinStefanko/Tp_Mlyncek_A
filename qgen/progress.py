@@ -15,6 +15,9 @@ STAGE_LEARNING_OBJECTS = "learning_objects"
 STAGE_LO_EVALUATION = "lo_evaluation"
 STAGE_QUESTIONS = "questions"
 STAGE_Q_EVALUATION = "q_evaluation"
+# After the pipeline (qgen.output.build_output): split into lessons, then the output.
+STAGE_SPLIT = "split"
+STAGE_OUTPUT = "output"
 
 PIPELINE_STAGES = (
     STAGE_EXTRACT,

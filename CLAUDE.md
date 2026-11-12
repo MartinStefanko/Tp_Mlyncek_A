@@ -148,24 +148,53 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Otvorené: bod 1 špecifikácie (limity polí priamo v prompte generovania) = zmena promptu, teda
   nová nahrávka; zatiaľ nie.
 
-## Rozhodnutia z kroku 15 (rozdelenie do hodín)
-- `qgen/split/` (sections, order, syllabus, lessons) sú čisté funkcie bez LLM a embeddingov
-  (test_import_guard). Krok 16 dodá témy celkov, maticu podobnosti celok × hodina sylabu,
-  plán zo `syllabus_text` a názov/popis hodiny (LLM).
+## Rozhodnutia z kroku 15 a 16 (rozdelenie do hodín)
+- `qgen/split/` (sections, order, topics, syllabus, lessons) sú čisté funkcie bez LLM a embeddingov
+  (test_import_guard). Volania (témy, plán sylabu, názvy hodín) sú v `qgen/output/split.py`
+  (`run_split`), prompty v `qgen/output/prompts.py`, rola LLM `split`.
+- Krok 16, rozhodnutie Martina (variant A): počet hodín sa NEURČUJE zo súčtu časov otázok
+  (otázky sú zásobník; eko.pdf 560 min by dalo 12 hodín). Kapacita hodiny neexistuje.
+  `lessons` vyžaduje `lesson_count`; `lesson_minutes` ostáva v kontrakte (Príloha A), kontroluje
+  sa rozsah, ale nemá vplyv a nedopĺňa sa. `QGEN_DEFAULT_LESSON_MINUTES` zrušené.
 - Poradie: Kahn, zhoda = (číslo dokumentu, prvá strana, id) ako lo_page_sort_key, D10 za D9.
   Cyklus: v cyklickej komponente celok s najskoršou stranou stratí prerekvizity z komponenty.
-- lessons: DP s celočíselnou cenou Σ (T − C)², rez vnútri témy +0,02·C²; zhoda → skorší rez.
-  Celok > C = vlastná hodina (lesson_count sa zvýši s varovaním); lesson_count > počet celkov → zníži.
-- topics: behy jednej témy v poradí a; N = round(T / C); spájanie susedov, ak jeden < 80 % C
-  a spolu ≤ 120 % C. Celok bez témy patrí k predchádzajúcemu behu.
+- Témy: vektory tém a celkov z `analyze_topic_coverage` (parameter `vectors`) →
+  `LOPipelineResult.embeddings` (nové id, neserializuje sa). Žiadne nové volanie. Téma celku
+  = najpodobnejšia (spec c; Section.topic a question_meta.topic v reporte).
+- Úseky tém: Viterbi, Σ podobnosť − 0,1 × počet zmien témy (`TOPIC_SWITCH_PENALTY`).
+- lessons: DP Σ T² (= čo najrovnomernejšie), rez vnútri úseku témy +0,02 · priemer²; zhoda →
+  skorší rez. lesson_count > počet celkov → zníži (`lesson_count_reduced`).
+- topics: hodina = úsek témy; úsek < 50 % mediánu sa spojí s menším susedom, úsek > 3 × medián
+  sa rozdelí na round(T / medián) častí. Bez tém → 1 hodina + `no_document_topics`.
+  eko.pdf: 8 hodín; lessons s lesson_count 3: celky 1–15, 16–32, 33–42.
+- `lessons_unbalanced`: hodina > 50 % od priemeru (lessons, topics). Zrušené: lesson_time_deviation,
+  lesson_over_capacity, section_over_capacity, lesson_count_increased.
 - Sylabus (rozhodnutie Martina, režim instructions nebude): `split.syllabus` (zoznam) ALEBO
   `split.syllabus_text` (voľný text ≤ 4000), práve jedno. Text LLM iba prevedie na interný
   `SyllabusPlan` (hodiny so stranami ALEBO section_ids, skipped_section_ids, alebo iba
-  lesson_count / lesson_minutes → algoritmus lessons). Verejná SyllabusLesson sa nezmenila.
-  Zlý plán nikdy nezlyhá: neznáme id a duplicity = varovania; nič použiteľné → záloha topics
-  (`SplitResult.fallback`). Strany sylabu s D-indexom nad počet súborov → 400 invalid_options.
-- Prázdny vstup → žiadne hodiny; čo dať do units (min. 1), rozhodne krok 16.
-- Kódy varovaní: prerequisite_cycle, prerequisite_order, section_over_capacity,
-  lesson_time_deviation, lesson_over_capacity, lesson_count_reduced, lesson_count_increased,
-  empty_lesson, syllabus_unknown_section, syllabus_duplicate_section, syllabus_skipped_sections,
-  syllabus_fallback.
+  lesson_count → lessons, alebo iba lesson_minutes → topics + `syllabus_lesson_minutes_ignored`).
+  Text je v prompte v `<<< >>>` s pravidlom ignorovať pokyny. Neplatný plán → jedno opakovanie
+  s chybami (cesty a druhy), potom záloha topics + `syllabus_plan_invalid`; LLMError tiež.
+  Neznáme id a duplicity = varovania. Strany sylabu s D-indexom nad počet súborov → 400.
+  Podobnosť celok × hodina sylabu: vektory celkov z pipeline + 1 embedding hodín.
+- Názov a popis hodiny (bod f): LLM pre všetky hodiny naraz po `QGEN_SPLIT_TITLE_BATCH_SIZE`
+  (10), AJ v režime single (rozhodnutie Martina: nová hodina v ECEH by sa inak volala podľa PDF).
+  Sylabus: názov učiteľa/plánu, LLM iba pre chýbajúci popis. Text cez nh3 bez značiek,
+  cut_at_word 255 / 4000. Zlyhanie → názvy tém, inak „prvý celok a ďalšie“, popis = zoznam
+  celkov, `lesson_titles_failed`. Úloha kvôli splitu nikdy nezlyhá.
+- Výstup: stage split → output. Otázky v hodine: poradie celkov, choice → open → no_answer.
+  Otázky vynechaných celkov nie sú v units ani v question_meta (celky ostávajú v sections).
+  Hodina bez prijatej otázky sa vynechá (`empty_lesson`); žiadna hodina → 1 prázdny unit +
+  `no_questions` (posledné varovanie). Varovania: diagnostika pipeline, split, otázky.
+  `timings.split`.
+- Nahrávky: pipeline sa nemenila, baseline_v5 ostáva referenciou. Split má krátke nadstavbové
+  nahrávky (tools/baseline.py `--base baseline_v5 --split JSON`): baseline_v5_single, _topics,
+  _lessons3, _syllabus_text (chránené). Replay = `ReplayClient([v5, nadstavba])`,
+  test `tests/output/test_split_replay.py` (bez nahrávky sa preskočí). Worker replay test a
+  test_cli --split odpovedajú na názvy hodín falošným klientom (`TitlesLLM`).
+- Windows: `atomic_write_bytes` opakuje `os.replace` pri PermissionError (antivírus drží súbor),
+  najviac 10×; na Linuxe nie.
+- Kódy varovaní: prerequisite_cycle, prerequisite_order, lesson_count_reduced, lessons_unbalanced,
+  no_document_topics, empty_lesson, no_questions, syllabus_unknown_section,
+  syllabus_duplicate_section, syllabus_skipped_sections, syllabus_fallback, syllabus_plan_invalid,
+  syllabus_lesson_minutes_ignored, lesson_titles_failed.

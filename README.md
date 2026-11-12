@@ -223,7 +223,7 @@ uvicorn service.main:app --port 8000
 
 Mock číta tieto premenné: `QGEN_API_KEYS`, `QGEN_WEBHOOK_ALLOWED_HOSTS`, `QGEN_WEBHOOK_SECRET`,
 `QGEN_WEBHOOK_TIMEOUT_S`, `QGEN_MAX_FILES`, `QGEN_MAX_UPLOAD_MB`, `QGEN_MAX_ACTIVE_JOBS`,
-`QGEN_FAILED_INPUT_TTL_HOURS`, `QGEN_DEFAULT_LESSON_MINUTES`, `QGEN_OCR_ENABLED` a
+`QGEN_FAILED_INPUT_TTL_HOURS`, `QGEN_OCR_ENABLED` a
 `QGEN_MOCK_DURATION_S` (dĺžka jednej úlohy v sekundách, predvolene 30).
 
 ### Príklady (curl)
@@ -235,7 +235,7 @@ curl -X POST http://localhost:8000/v1/jobs \
   -F "files=@eko.pdf" \
   -F 'options={"external_ref": "gen-01JB7Q3K",
                "callback_url": "http://eceh-backend/api/internal/qgen/webhook",
-               "split": {"mode": "topics", "lesson_minutes": 45}}'
+               "split": {"mode": "topics"}}'
 
 # Rovnaký request znova -> 200, rovnaké job_id, "replayed": true
 # Stav úlohy
@@ -383,7 +383,9 @@ odpovedá z nahrávky `baseline_v5/llm_calls.jsonl` (override `docker-compose.re
 Potrebujete Docker, lokálnu nahrávku `baseline_v5/` a `eko.pdf` (v `tests/fixtures/` alebo
 `Hlavna_cast/ucebny_material/`). Porty 8000 a 9000 musia byť voľné. Skript sám spustí
 kontajnery, prijíma webhooky (port 9000) a na konci zavolá `docker compose down` (volume
-ostanú). Beží asi 15 minút, nie je súčasťou `pytest`.
+ostanú). Beží asi 15 minút, nie je súčasťou `pytest`. Názov hodiny (krok 16) v nahrávke
+baseline_v5 nie je: replay ho odmietne a služba použije záložný názov s varovaním
+`lesson_titles_failed`, úloha sa dokončí.
 
 ```bash
 venv/Scripts/python.exe tools/resilience_check.py                 # všetky scenáre
@@ -427,16 +429,19 @@ a vzájomnou zhodou.
 
 ## Pipeline z príkazového riadka (CLI)
 
-CLI spustí extrakciu, tematické celky a otázky. Výsledky a reporty zapíše do priečinka.
-Formát výstupu je zatiaľ pôvodný (`learning_objects.json`, `questions.json`, `reports/*.txt`).
+CLI spustí extrakciu, tematické celky a otázky. Výsledky a reporty zapíše do priečinka
+v pôvodnom formáte (`learning_objects.json`, `questions.json`, `reports/*.txt`). S `--split`
+spustí aj rozdelenie do hodín a výstup služby a zapíše navyše `units.json` a `report.json`.
 
 ```bash
 venv/Scripts/python.exe -m qgen.cli eko.pdf --out vystup
 venv/Scripts/python.exe -m qgen.cli a.pdf b.pdf --out vystup --ocr --language sk
+venv/Scripts/python.exe -m qgen.cli eko.pdf --out vystup --split '{"mode": "topics"}'
 ```
 
 - `--ocr` zapne OCR obrázkov. Potrebuje knižnicu `easyocr`. Predvolená hodnota je `QGEN_OCR_ENABLED` (false).
 - `--language auto|sk|en` určí jazyk dokumentu. Pri `auto` (predvolené) jazyk zistí LLM.
+- `--split JSON` je `options.split` (napr. `{"mode": "lessons", "lesson_count": 3}`).
 - `--verbose` vypíše aj vlastné hlásenia pipeline.
 
 Všetky nastavenia (modely, prahy, veľkosti batchov, limity) sú v `qgen/config.py`

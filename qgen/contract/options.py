@@ -53,7 +53,17 @@ def page_range_errors(text: str) -> list[str]:
     return errors
 
 
-LessonMinutes = Annotated[int, Field(ge=LESSON_MINUTES_MIN, le=LESSON_MINUTES_MAX, description="Lesson length in minutes.")]
+LessonMinutes = Annotated[
+    int,
+    Field(
+        ge=LESSON_MINUTES_MIN,
+        le=LESSON_MINUTES_MAX,
+        description=(
+            "Lesson length in minutes. Ignored: the number of lessons does not come from the time of the "
+            "questions (they are a pool the teacher picks from); kept for compatibility (Príloha A)."
+        ),
+    ),
+]
 LessonCount = Annotated[int, Field(ge=1, le=LESSON_COUNT_MAX, description="Number of lessons.")]
 Language = Literal["auto", "sk", "en"]
 
@@ -100,7 +110,8 @@ class QuestionOptions(_OptionsModel):
 # Every variant accepts the other variants' keys only as null, so the full-shape
 # example from Príloha A ({"mode": "topics", "lesson_count": null, ..., "syllabus": null})
 # stays valid while a value in a field that the mode does not use is rejected.
-# A missing lesson_minutes is filled by resolve_options (QGEN_DEFAULT_LESSON_MINUTES).
+# lesson_minutes is accepted (range checked) but has no effect since step 16: the number of
+# lessons is lesson_count (mode lessons), the topics of the document (topics) or the syllabus.
 # Mode "syllabus" takes the teacher's syllabus either as a list of lessons (`syllabus`) or
 # as free text (`syllabus_text`, turned into a structured plan by the LLM in step 16; the
 # text is never executed) – exactly one of the two.
@@ -116,16 +127,10 @@ class SingleSplit(_OptionsModel):
 
 class LessonsSplit(_OptionsModel):
     mode: Literal["lessons"]
-    lesson_count: Optional[LessonCount] = None
+    lesson_count: LessonCount
     lesson_minutes: Optional[LessonMinutes] = None
     syllabus: None = None
     syllabus_text: None = None
-
-    @model_validator(mode="after")
-    def _count_or_minutes(self) -> "LessonsSplit":
-        if self.lesson_count is None and self.lesson_minutes is None:
-            raise ValueError("split mode 'lessons' needs lesson_count or lesson_minutes")
-        return self
 
 
 class TopicsSplit(_OptionsModel):
@@ -212,8 +217,7 @@ class OptionDefaults:
     """Values used for options the caller did not send (Príloha A, Príloha D).
 
     The defaults here are the documented ones; the configuration builds this object
-    with `qgen.config.Settings.option_defaults()` (QGEN_OCR_ENABLED,
-    QGEN_DEFAULT_LESSON_MINUTES).
+    with `qgen.config.Settings.option_defaults()` (QGEN_OCR_ENABLED).
     """
 
     language: Language = "auto"
@@ -222,20 +226,18 @@ class OptionDefaults:
     per_section: int = 3
     choice_options: int = 4
     hints: int = 2
-    lesson_minutes: int = 45
 
 
 def resolve_options(options: JobOptions, defaults: OptionDefaults) -> JobOptions:
     """Return complete options: every None replaced by the value from `defaults`.
 
     The result is what gets stored with the job. external_ref and callback_url stay
-    as sent (None means "not used"); unused split fields stay null.
+    as sent (None means "not used"); split stays as sent (lesson_minutes is not filled,
+    it has no effect).
     """
     extraction = options.extraction or ExtractionOptions()
     questions = options.questions or QuestionOptions()
     split = options.split
-    if split.lesson_minutes is None:
-        split = split.model_copy(update={"lesson_minutes": defaults.lesson_minutes})
 
     resolved = JobOptions(
         external_ref=options.external_ref,
@@ -250,7 +252,7 @@ def resolve_options(options: JobOptions, defaults: OptionDefaults) -> JobOptions
         ),
         split=split,
     )
-    # Validate once more so that bad defaults (e.g. lesson_minutes=0 in .env) fail here.
+    # Validate once more so that bad defaults (e.g. per_section=0) fail here.
     return JobOptions.model_validate(resolved.model_dump())
 
 

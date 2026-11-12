@@ -1,26 +1,47 @@
 {
   "single": {
     "external_ref": "gen-single-01",
-    "split": {"mode": "single"}
+    "split": {
+      "mode": "single"
+    }
   },
   "lessons": {
     "external_ref": "gen-lessons-01",
-    "questions": {"types": ["choice", "open"], "per_section": 3},
-    "split": {"mode": "lessons", "lesson_count": 6, "lesson_minutes": 45}
+    "questions": {
+      "types": [
+        "choice",
+        "open"
+      ],
+      "per_section": 3
+    },
+    "split": {
+      "mode": "lessons",
+      "lesson_count": 3
+    }
   },
   "topics": {
     "external_ref": "gen-topics-01",
-    "split": {"mode": "topics", "lesson_minutes": 45}
+    "split": {
+      "mode": "topics"
+    }
   },
   "syllabus_list": {
     "external_ref": "gen-syllabus-01",
     "split": {
       "mode": "syllabus",
-      "lesson_minutes": 45,
       "syllabus": [
-        {"title": "Jednoduchý úrok a diskont", "pages": "D1:1-10"},
-        {"title": "Zložené úrokovanie", "description": "efektívna úroková miera, ekvivalencia sadzieb"},
-        {"title": "Anuity a perpetuita", "pages": "D1:36-48"}
+        {
+          "title": "Jednoduchý úrok a diskont",
+          "pages": "D1:1-10"
+        },
+        {
+          "title": "Zložené úrokovanie",
+          "description": "efektívna úroková miera, ekvivalencia sadzieb"
+        },
+        {
+          "title": "Anuity a perpetuita",
+          "pages": "D1:36-48"
+        }
       ]
     }
   },
@@ -28,7 +49,6 @@
     "external_ref": "gen-syllabus-02",
     "split": {
       "mode": "syllabus",
-      "lesson_minutes": 45,
       "syllabus_text": "3 hodiny: najprv teória úrokovania, potom príklady, perpetuity vynechaj"
     }
   }

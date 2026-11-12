@@ -52,11 +52,11 @@ logger = logging.getLogger("qgen.worker")
 PROGRESS_INTERVAL_S = 2.0
 PROGRESS_BEFORE_COMPLETED = 0.99
 
-# Share of each step in the whole run (split is skipped in mode "single"), from the times of
-# baseline_v4 (eko.pdf, 460 s): sections (tematické celky) 38 s (generation 25 s, checks 13 s),
-# question generation incl. the extra round 168 s, question evaluation 253 s. Extraction,
-# language and output keep a small fixed share (0.05); the rest (0.95) is split by these
-# times: questions + q_evaluation = 0.87.
+# Share of each step in the whole run, from the times of baseline_v4 (eko.pdf, 460 s):
+# sections (tematické celky) 38 s (generation 25 s, checks 13 s), question generation incl.
+# the extra round 168 s, question evaluation 253 s. Extraction, language, split (lessons and
+# their titles, every mode) and output keep a small fixed share (0.05); the rest (0.95) is
+# split by these times: questions + q_evaluation = 0.87.
 STAGE_WEIGHTS: dict[str, float] = {
     "extract": 0.02,
     "language": 0.01,
@@ -64,9 +64,10 @@ STAGE_WEIGHTS: dict[str, float] = {
     "lo_evaluation": 0.03,
     "questions": 0.35,
     "q_evaluation": 0.52,
-    "output": 0.02,
+    "split": 0.01,
+    "output": 0.01,
 }
-STAGE_ORDER: tuple[str, ...] = (*PIPELINE_STAGES, "output")
+STAGE_ORDER: tuple[str, ...] = (*PIPELINE_STAGES, "split", "output")
 
 
 # --- stop signals ---------------------------------------------------------------------------
@@ -265,26 +266,30 @@ class JobRunner:
             question_options=options.questions,
         )
 
-        progress("output", 0, 1)
+        progress("split", 0, 1)
         step_started = time.perf_counter()
         output = build_output(
             result,
             input_names=[f.name for f in record.input_files],
             timings=timings,
             settings=self.settings,
+            split=options.split,
             llm=llm,
+            embedder=embedder,
             progress_callback=progress,
         )
-        output.report.timings["output"] = round(time.perf_counter() - step_started, 4)
+        split_seconds = output.report.timings.get("split", 0.0)
+        output.report.timings["output"] = round(max(0.0, time.perf_counter() - step_started - split_seconds), 4)
         progress.check_deadline()
         check_output(output.result, output.report)
         self.store.save_result(job_id, output.result)
         self.store.save_report(job_id, output.report)
         logger.info(
-            "job output job_id=%s sections=%d questions=%d dropped=%d",
+            "job output job_id=%s sections=%d units=%d questions=%d dropped=%d",
             job_id,
             len(output.report.sections),
-            len(output.result.units[0].questions),
+            len(output.result.units),
+            sum(len(unit.questions) for unit in output.result.units),
             output.dropped,
         )
 

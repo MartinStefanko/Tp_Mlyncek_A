@@ -21,7 +21,11 @@ def analyze_topic_coverage(
     source_max_chars: Optional[int] = None,
     *,
     settings: Settings,
+    vectors: Optional[Dict[str, Any]] = None,
 ):
+    """`vectors`: when given, gets the embeddings computed here (step 16, split into lessons):
+    "topics" (names), "topic_vectors" and "section_vectors" (LO id before renumbering →
+    vector). No other call and no change of the report."""
     embedding_model = setting_or_default(embedding_model, "embed_model", settings)
     similarity_threshold = setting_or_default(similarity_threshold, "topic_match_threshold", settings)
     report = {
@@ -52,6 +56,10 @@ def analyze_topic_coverage(
     lo_embeddings = embed_texts(embedder, lo_texts, model=embedding_model, settings=settings)
 
     sim_matrix = cosine_similarity(np.array(topic_embeddings), np.array(lo_embeddings))
+    if vectors is not None:
+        vectors["topics"] = list(topic_texts)
+        vectors["topic_vectors"] = [list(v) for v in topic_embeddings]
+        vectors["section_vectors"] = {lo.get("id"): list(v) for lo, v in zip(los, lo_embeddings)}
 
     covered_count = 0
     for idx, topic in enumerate(topics):

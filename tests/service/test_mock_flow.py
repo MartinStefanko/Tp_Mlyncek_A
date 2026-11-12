@@ -135,15 +135,15 @@ def test_stored_options_are_complete(api):
         "language": "auto",
         "extraction": {"ocr": False},
         "questions": {"types": ["open"], "per_section": 3, "choice_options": 4, "hints": 2},
-        "split": {"mode": "single", "lesson_count": None, "lesson_minutes": 45, "syllabus": None, "syllabus_text": None},
+        "split": {"mode": "single", "lesson_count": None, "lesson_minutes": None, "syllabus": None, "syllabus_text": None},
     }
 
 
 def test_defaults_come_from_settings(api_factory):
-    api = api_factory(default_lesson_minutes=90, ocr_enabled=True)
+    api = api_factory(ocr_enabled=True)
     job_id = api.create_id({"split": {"mode": "topics"}})
     stored = api.stored_options(job_id)
-    assert stored.split.lesson_minutes == 90
+    assert stored.split.lesson_minutes is None  # no effect since step 16, not filled in
     assert stored.extraction.ocr is True
 
 
@@ -196,7 +196,7 @@ def test_health_info_docs(api):
     body = info.json()
     assert body["backend"] == api.kind
     assert body["limits"]["max_files"] == 10
-    assert body["option_defaults"]["lesson_minutes"] == 45
+    assert "lesson_minutes" not in body["option_defaults"]
     assert "test-key" not in info.text and "test-secret" not in info.text
 
     assert api.client.get("/docs").status_code == 200

@@ -28,6 +28,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -126,11 +127,31 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, path)
+        replace_file(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
     fsync_dir(path.parent)
+
+
+# Windows only: a virus scanner or the search indexer may hold the just written file open for
+# a moment without FILE_SHARE_DELETE; os.replace then fails with PermissionError (errno 13).
+# The job lock serializes our own readers and writers, so this can only be such a short
+# outside handle: wait 10, 20, ... ms and try again. On Linux (Docker) it never happens.
+REPLACE_ATTEMPTS = 10
+REPLACE_WAIT_S = 0.01
+RETRY_REPLACE = os.name == "nt"
+
+
+def replace_file(source: Path, target: Path, *, sleep: Callable[[float], None] = time.sleep) -> None:
+    for attempt in range(1, REPLACE_ATTEMPTS + 1):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if not RETRY_REPLACE or attempt == REPLACE_ATTEMPTS:
+                raise
+            sleep(REPLACE_WAIT_S * attempt)
 
 
 def _write_new_file(path: Path, data: bytes) -> None:

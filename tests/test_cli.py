@@ -121,3 +121,48 @@ def test_cli_rejects_bad_arguments(tmp_path):
         cli.main([str(EKO_PDF), "--out", str(tmp_path), "--language", "de"], llm=object(), embedder=object())
     with pytest.raises(SystemExit):
         cli.main([str(EKO_PDF)], llm=object(), embedder=object())  # --out is required
+
+
+# --- --split (step 16) --------------------------------------------------------------------------
+
+
+def test_cli_split_writes_units_and_report(tmp_path, capsys, baseline_segments_extraction):
+    """--split runs the output step: units.json by topics (8 lessons on eko.pdf) and report.json;
+    the lesson titles come from a fake, the rest from the replay of baseline_v5."""
+    require_baseline()
+    from qgen.contract import Report, UnitsResult
+    from tests.fakes import TitlesLLM
+
+    out = tmp_path / "out"
+    replay = replay_client()
+    code = cli.main(
+        [str(EKO_PDF), "--out", str(out), "--split", '{"mode": "topics"}'],
+        llm=TitlesLLM(replay), embedder=replay, settings=baseline_settings(),
+    )
+    assert code == 0
+    units = UnitsResult.model_validate(_read_json(out / "units.json"))
+    report = Report.model_validate(_read_json(out / "report.json"))
+    assert len(units.units) == 8
+    assert sum(len(u.questions) for u in units.units) == len(load_json("questions.json")) == len(report.question_meta)
+    assert "8 lessons" in capsys.readouterr().out
+
+
+def test_cli_without_split_writes_no_units(tmp_path, monkeypatch):
+    args = cli.build_parser().parse_args(["a.pdf", "--out", str(tmp_path)])
+    assert args.split is None
+
+
+@pytest.mark.parametrize(
+    ("text", "mode"),
+    [('{"mode": "single"}', "single"), ('{"mode": "lessons", "lesson_count": 3}', "lessons"),
+     ('{"mode": "syllabus", "syllabus_text": "2 hodiny"}', "syllabus")],
+)
+def test_cli_split_parsing(text, mode):
+    assert cli.build_parser().parse_args(["a.pdf", "--out", "o", "--split", text]).split.mode == mode
+
+
+@pytest.mark.parametrize("text", ['{"mode": "lessons"}', "{bad json", '{"mode": "chapters"}'])
+def test_cli_split_rejects_invalid_options(text, capsys):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["a.pdf", "--out", "o", "--split", text])
+    assert "--split" in capsys.readouterr().err

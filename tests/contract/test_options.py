@@ -73,7 +73,6 @@ def test_appendix_example_passes():
         ),
         ({"mode": "syllabus", "syllabus": [{"title": "A", "pages": "D1:1-10, D2:3"}], "syllabus_text": None}, SyllabusSplit),
         ({"mode": "topics", "syllabus_text": None}, TopicsSplit),
-        ({"mode": "lessons", "lesson_minutes": 90}, LessonsSplit),
         ({"mode": "topics"}, TopicsSplit),
     ],
 )
@@ -103,6 +102,7 @@ def test_valid_split_modes(split, cls):
         {"mode": "single", "syllabus_text": "2 hodiny"},
         {"mode": "lessons"},
         {"mode": "lessons", "lesson_count": None, "lesson_minutes": None},
+        {"mode": "lessons", "lesson_minutes": 90},
         {"mode": "lessons", "lesson_count": 0},
         {"mode": "lessons", "lesson_count": 101},
         {"mode": "lessons", "lesson_minutes": 0},
@@ -160,7 +160,6 @@ def test_spec_defaults():
         per_section=3,
         choice_options=4,
         hints=2,
-        lesson_minutes=45,
     )
 
 
@@ -175,7 +174,7 @@ def test_resolve_empty_options():
         "split": {
             "mode": "single",
             "lesson_count": None,
-            "lesson_minutes": 45,
+            "lesson_minutes": None,
             "syllabus": None,
             "syllabus_text": None,
         },
@@ -196,14 +195,15 @@ def test_resolve_partial_questions_fills_the_rest():
 
 
 def test_resolve_uses_given_defaults():
-    defaults = OptionDefaults(language="sk", ocr=True, question_types=("open",), per_section=5, lesson_minutes=90)
+    defaults = OptionDefaults(language="sk", ocr=True, question_types=("open",), per_section=5)
     resolved = resolve_options(JobOptions.model_validate({"split": {"mode": "lessons", "lesson_count": 4}}), defaults)
     assert resolved.language == "sk"
     assert resolved.extraction.ocr is True
     assert resolved.questions.types == ["open"]
     assert resolved.questions.per_section == 5
     assert isinstance(resolved.split, LessonsSplit)
-    assert (resolved.split.lesson_count, resolved.split.lesson_minutes) == (4, 90)
+    # lesson_minutes has no effect since step 16 and is not filled in
+    assert (resolved.split.lesson_count, resolved.split.lesson_minutes) == (4, None)
 
 
 def test_resolve_does_not_override_explicit_false_or_lesson_minutes():
@@ -220,10 +220,16 @@ def test_resolved_options_survive_json_round_trip():
 
 def test_resolve_rejects_invalid_defaults():
     with pytest.raises(ValidationError):
-        resolve_options(JobOptions(), OptionDefaults(lesson_minutes=0))
+        resolve_options(JobOptions(), OptionDefaults(per_section=0))
 
 
 def test_syllabus_text_survives_resolve():
     text = "5 hodín, perpetuity vynechaj"
     resolved = resolve_options(JobOptions.model_validate({"split": {"mode": "syllabus", "syllabus_text": text}}), SPEC_DEFAULTS)
-    assert (resolved.split.syllabus, resolved.split.syllabus_text, resolved.split.lesson_minutes) == (None, text, 45)
+    assert (resolved.split.syllabus, resolved.split.syllabus_text, resolved.split.lesson_minutes) == (None, text, None)
+
+
+def test_lessons_need_lesson_count():
+    with pytest.raises(ValidationError):
+        JobOptions.model_validate({"split": {"mode": "lessons", "lesson_minutes": 45}})
+    assert JobOptions.model_validate({"split": {"mode": "lessons", "lesson_count": 2, "lesson_minutes": 45}})

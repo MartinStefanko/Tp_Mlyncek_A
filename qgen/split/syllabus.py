@@ -3,8 +3,9 @@
 The list from options (`split.syllabus`) becomes a plan with `plan_from_syllabus`; free text
 (`split.syllabus_text`) is turned into a plan by the LLM in step 16 – the text itself is never
 executed. A plan either lists lessons (each with pages OR section ids OR neither) and the
-sections to leave out, or gives only lesson_count / lesson_minutes ("rozdeľ na 5 hodín"),
-which runs the lessons algorithm.
+sections to leave out, or gives only lesson_count ("rozdeľ na 5 hodín", the lessons
+algorithm) or only lesson_minutes ("hodiny po 90 minút": the length of a lesson is not used,
+the split goes by topics with a warning).
 
 `assign_sections` applies a plan with lessons. A bad plan never raises: unknown ids and
 duplicates are warnings; a plan that leaves no lesson with a section is reported as
@@ -65,7 +66,9 @@ class SyllabusPlan(_PlanModel):
     lessons: list[PlannedLesson] = Field(default_factory=list, max_length=SYLLABUS_MAX_LESSONS)
     skipped_section_ids: list[int] = Field(default_factory=list, description="Sections left out of all lessons.")
     lesson_count: Optional[LessonCount] = None
-    lesson_minutes: Optional[LessonMinutes] = None
+    lesson_minutes: Optional[LessonMinutes] = Field(
+        default=None, description="Lesson length asked for in the text; not used (warning)."
+    )
 
     @model_validator(mode="after")
     def _lessons_or_count(self) -> "SyllabusPlan":

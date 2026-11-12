@@ -1,7 +1,8 @@
 """Input of the split into lessons (kap. 8): sections (tematické celky) and their questions.
 
 A section knows only what the algorithm needs: id, prerequisites, cited pages (order of the
-document and the syllabus page ranges), time and topic. `build_split_sections` makes them
+document and the syllabus page ranges) and time. Topics come separately, as the similarity
+of every section to the document topics (qgen.split.topics). `build_split_sections` makes them
 from the pipeline sections (LO dicts) and questions; nothing here calls an LLM or embeddings.
 """
 
@@ -32,13 +33,13 @@ __all__ = [
 
 @dataclass(frozen=True)
 class SplitSection:
-    """One section (tematický celok); `seconds` = Σ time_to_handle + time_to_explain of its questions."""
+    """One section (tematický celok); `seconds` = Σ time_to_handle + time_to_explain of its
+    questions (only balances lessons against each other, never sets their number)."""
 
     id: int
     prerequisites: tuple[int, ...] = ()
     pages: tuple[PageRef, ...] = ()
     seconds: int = 0
-    topic: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -76,11 +77,7 @@ def page_sort_key(section: SplitSection) -> tuple:
     return (number if number is not None else math.inf, page, section.id)
 
 
-def build_split_sections(
-    sections: list[dict],
-    items: list[dict],
-    topics: Optional[dict[Any, str]] = None,
-) -> list[SplitSection]:
+def build_split_sections(sections: list[dict], items: list[dict]) -> list[SplitSection]:
     """Sections of the pipeline (id, prerekvizity, citovane_zdroje) with the time of their
     questions (lo_id, time_to_handle, time_to_explain).
 
@@ -106,7 +103,6 @@ def build_split_sections(
                 prerequisites=tuple(prerequisites),
                 pages=tuple(parse_source_refs(lo.get("citovane_zdroje", []))),
                 seconds=seconds[lo["id"]],
-                topic=(topics or {}).get(lo["id"]),
             )
         )
     return result

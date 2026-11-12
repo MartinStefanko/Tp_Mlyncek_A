@@ -89,8 +89,8 @@ def test_build_split_sections_sums_times_and_drops_sections_without_questions():
         {"lo_id": 2, "time_to_handle": 300, "time_to_explain": 0},
         {"lo_id": 1, "time_to_handle": 120, "time_to_explain": None},
     ]
-    found = build_split_sections(los, items, topics={2: "Úrok"})
-    assert [(s.id, s.seconds, s.prerequisites, s.pages, s.topic) for s in found] == [
-        (1, 210, (), (("D1", 3),), None),
-        (2, 300, (1,), (("D1", 5), ("D1", 6)), "Úrok"),
+    found = build_split_sections(los, items)
+    assert [(s.id, s.seconds, s.prerequisites, s.pages) for s in found] == [
+        (1, 210, (), (("D1", 3),)),
+        (2, 300, (1,), (("D1", 5), ("D1", 6))),
     ]

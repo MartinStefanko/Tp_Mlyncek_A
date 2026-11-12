@@ -124,6 +124,9 @@ class Settings(BaseSettings):
     context_max_chars: int = Field(default=8000, ge=1, description="Source text for one LO or question.")
     language_sample_max_chars: int = Field(default=12000, ge=1, description="Text for language detection.")
     topic_source_max_chars: int = Field(default=20000, ge=1, description="Text for topic extraction.")
+    split_title_batch_size: int = Field(
+        default=10, ge=1, description="Lessons per call for the lesson titles and descriptions (step 16)."
+    )
 
     # --- Question generation (krok 13) -------------------------------------------------------
     question_extra_rounds: int = Field(
@@ -160,7 +163,6 @@ class Settings(BaseSettings):
 
     # --- Option defaults ------------------------------------------------------------------
     ocr_enabled: bool = False
-    default_lesson_minutes: int = 45
 
     # --- Access and input limits --------------------------------------------------------
     api_keys: SecretStr = Field(default=SecretStr(""), description="Comma-separated keys; empty = no check.")
@@ -228,7 +230,7 @@ class Settings(BaseSettings):
         return self.embed_api_key.get_secret_value() or self.llm_api_key.get_secret_value()
 
     def option_defaults(self) -> OptionDefaults:
-        return OptionDefaults(ocr=self.ocr_enabled, lesson_minutes=self.default_lesson_minutes)
+        return OptionDefaults(ocr=self.ocr_enabled)
 
 
 def setting_or_default(value, name: str, settings: Optional["Settings"] = None):

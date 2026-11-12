@@ -135,7 +135,7 @@ def test_progress_callback_per_shortening_call():
     llm = FakeLLM(default=items([]))
     build([section(1, "A")], [question(1, name="x " * 200), question(1), question(1, name="y " * 200)],
           llm=llm, progress_callback=lambda *args: seen.append(args))
-    assert seen == [("output", 1, 2), ("output", 2, 2)]
+    assert [x for x in seen if x[0] == "output"] == [("output", 0, 1), ("output", 1, 2), ("output", 2, 2)]
 
 
 def test_parallel_shortening_keeps_the_order():

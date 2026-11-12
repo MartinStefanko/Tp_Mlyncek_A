@@ -1,14 +1,18 @@
-"""Modes single / lessons / topics, checks of step g and the order of the questions (kap. 8)."""
+"""Modes single / lessons / topics, checks of step g and the order of the questions (kap. 8).
+
+Since step 16 the number of lessons never comes from the time of the questions: lessons
+takes lesson_count, topics the topic runs of the document.
+"""
 
 import random
 
 import pytest
 
-from qgen.split import SplitQuestion, order_questions, split_lessons
+from qgen.split import SplitQuestion, order_questions, section_topics, split_lessons, topic_segments
 
-from .helpers import chain, codes, ids, lessons, section, single, syllabus_text, topics
+from .helpers import chain, codes, ids, lessons, section, single, syllabus_text, topical, topics
 
-ALL_MODES = [single(), lessons(minutes=45), lessons(count=3), topics()]
+ALL_MODES = [single(), lessons(3), topics()]
 
 
 # --- edge cases common to all modes -------------------------------------------------------------
@@ -22,9 +26,10 @@ def test_empty_input_gives_no_lessons(split):
 
 @pytest.mark.parametrize("split", ALL_MODES)
 def test_one_section_is_one_lesson(split):
-    result = split_lessons([section(1, 30)], split)
+    result = split_lessons([section(1, 30)], split, **topical(["A"]))
     assert ids(result) == [[1]]
     assert result.lessons[0].seconds == 1800
+    assert result.lessons[0].topics == ("A",)
 
 
 @pytest.mark.parametrize("split", ALL_MODES)
@@ -38,21 +43,22 @@ def test_no_lesson_is_empty_and_every_section_is_used_once(split):
                 rng.choice([0, 3, 8, 15, 25, 40, 60]),
                 prerequisites=tuple(p for p in range(1, n + 1) if p != i and rng.random() < 0.08),
                 page=rng.randint(1, 40),
-                topic=rng.choice(["A", "B", "C", None]),
             )
             for i in range(1, n + 1)
         ]
-        result = split_lessons(sections, split)
+        labels = [rng.choice(["A", "B", "C", None]) for _ in range(n)]
+        result = split_lessons(sections, split, **topical(labels))
         assert all(lesson.section_ids for lesson in result.lessons)
         assert sorted(sid for lesson in result.lessons for sid in lesson.section_ids) == list(range(1, n + 1))
         assert "prerequisite_order" not in codes(result)
 
 
-@pytest.mark.parametrize("split", [*ALL_MODES, lessons(count=2)])
+@pytest.mark.parametrize("split", [*ALL_MODES, lessons(2)])
 def test_result_is_deterministic(split):
-    sections = chain([12, 7, 20, 5, 30, 18, 9, 22, 14], topics=list("AABBBCCDD"))
-    first = split_lessons(sections, split)
-    again = split_lessons(list(reversed(sections)), split)
+    sections = chain([12, 7, 20, 5, 30, 18, 9, 22, 14])
+    labels = list("AABBBCCDD")
+    first = split_lessons(sections, split, **topical(labels))
+    again = split_lessons(list(reversed(sections)), split, **topical(labels))
     assert ids(first) == ids(again)
     assert codes(first) == codes(again)
 
@@ -67,80 +73,67 @@ def test_single_puts_everything_in_one_lesson_in_order():
     assert result.warnings == []
 
 
-def test_single_over_capacity_is_only_reported():
-    result = split_lessons(chain([30, 30]), single(45))
+def test_single_has_no_time_limit():
+    result = split_lessons(chain([300, 300]), single())
     assert ids(result) == [[1, 2]]
-    assert codes(result) == ["lesson_over_capacity"]
+    assert result.warnings == []
 
 
 # --- lessons -------------------------------------------------------------------------------------
 
 
-def test_lesson_count_from_round_not_ceil():
-    assert ids(split_lessons(chain([25, 25]), lessons(minutes=45))) == [[1, 2]]  # 50 min → 1
-    assert len(split_lessons(chain([35, 35]), lessons(minutes=45)).lessons) == 2  # 70 min → 2
+def test_lesson_count_sets_the_number_not_the_time():
+    # 560 minutes of questions in 3 lessons: still 3 lessons.
+    result = split_lessons(chain([20] * 28), lessons(3))
+    assert len(result.lessons) == 3
+    assert [len(x.section_ids) for x in result.lessons] == [9, 9, 10]
 
 
 def test_equal_times_split_evenly():
-    result = split_lessons(chain([15] * 6), lessons(minutes=45))
+    result = split_lessons(chain([15] * 6), lessons(2))
     assert ids(result) == [[1, 2, 3], [4, 5, 6]]
-    assert [lesson.seconds for lesson in result.lessons] == [2700, 2700]
     assert result.warnings == []
 
 
 def test_equal_times_tie_is_resolved_the_same_way():
-    assert ids(split_lessons(chain([15] * 4), lessons(count=3))) == [[1], [2], [3, 4]]
-
-
-def test_given_lesson_count_balances_lengths():
-    result = split_lessons(chain([10] * 8), lessons(count=4, minutes=45))
-    assert ids(result) == [[1, 2], [3, 4], [5, 6], [7, 8]]
-    assert codes(result) == ["lesson_time_deviation"] * 4  # 20 min against 45 min
+    assert ids(split_lessons(chain([15] * 4), lessons(3))) == [[1], [2], [3, 4]]
 
 
 def test_lesson_count_larger_than_sections():
-    result = split_lessons(chain([10, 10]), lessons(count=5))
+    result = split_lessons(chain([10, 10]), lessons(5))
     assert ids(result) == [[1], [2]]
-    assert codes(result)[0] == "lesson_count_reduced"
+    assert codes(result) == ["lesson_count_reduced"]
 
 
-def test_section_longer_than_lesson_is_own_lesson():
-    result = split_lessons(chain([10, 60, 10, 10]), lessons(minutes=45))
-    assert ids(result) == [[1], [2], [3, 4]]
-    assert codes(result) == ["section_over_capacity", "lesson_time_deviation", "lesson_time_deviation"]
-
-
-def test_lesson_count_raised_for_long_section():
-    result = split_lessons(chain([10, 60, 10]), lessons(count=2))
-    assert ids(result) == [[1], [2], [3]]
-    assert "lesson_count_increased" in codes(result)
+def test_big_section_makes_lessons_unbalanced():
+    result = split_lessons(chain([10, 60, 10, 10]), lessons(2))
+    assert ids(result) == [[1, 2], [3, 4]]  # 70 / 20 min, the most even split
+    assert codes(result) == ["lessons_unbalanced", "lessons_unbalanced"]
 
 
 def test_cut_prefers_topic_boundary_when_close():
-    # 30 × 3 min, 45-min lessons: the ideal cut is after 15 sections; topic A ends after 16
+    # 30 × 3 min in 2 lessons: the even cut is after 15 sections; topic A ends after 16
     # (48 / 42 min, ±7 %), so the cut moves to the boundary.
-    sections = chain([3] * 30, topics=["A"] * 16 + ["B"] * 14)
-    result = split_lessons(sections, lessons(minutes=45))
+    result = split_lessons(chain([3] * 30), lessons(2), **topical(["A"] * 16 + ["B"] * 14))
     assert [len(lesson.section_ids) for lesson in result.lessons] == [16, 14]
     assert [lesson.topics for lesson in result.lessons] == [("A",), ("B",)]
 
 
 def test_cut_ignores_topic_boundary_when_far():
-    # Topic A ends after 20 sections (60 / 30 min): balancing wins.
-    sections = chain([3] * 30, topics=["A"] * 20 + ["B"] * 10)
-    result = split_lessons(sections, lessons(minutes=45))
+    result = split_lessons(chain([3] * 30), lessons(2), **topical(["A"] * 20 + ["B"] * 10))
     assert [len(lesson.section_ids) for lesson in result.lessons] == [15, 15]
+    assert [lesson.topics for lesson in result.lessons] == [("A",), ("A", "B")]
 
 
 def test_lessons_follow_prerequisites():
     sections = [section(1, 30, page=1, prerequisites=(3,)), section(2, 30, page=2), section(3, 30, page=50)]
-    result = split_lessons(sections, lessons(count=3))
+    result = split_lessons(sections, lessons(3))
     assert ids(result) == [[2], [3], [1]]
 
 
 def test_cycle_is_reported_and_not_a_prerequisite_violation():
     sections = [section(1, 40, page=1, prerequisites=(2,)), section(2, 40, page=2, prerequisites=(1,))]
-    result = split_lessons(sections, lessons(count=2))
+    result = split_lessons(sections, lessons(2))
     assert ids(result) == [[1], [2]]
     assert codes(result) == ["prerequisite_cycle"]
 
@@ -148,47 +141,80 @@ def test_cycle_is_reported_and_not_a_prerequisite_violation():
 # --- topics ---------------------------------------------------------------------------------------
 
 
+def test_topics_without_topics_is_one_lesson():
+    result = split_lessons(chain([20, 20, 20]), topics())
+    assert ids(result) == [[1, 2, 3]]
+    assert codes(result) == ["no_document_topics"]
+
+
 def test_topics_one_lesson_per_topic():
-    result = split_lessons(chain([20, 20, 20, 20], topics=list("AABB")), topics())
+    result = split_lessons(chain([20, 20, 20, 20]), topics(), **topical(list("AABB")))
     assert ids(result) == [[1, 2], [3, 4]]
     assert [lesson.topics for lesson in result.lessons] == [("A",), ("B",)]
     assert result.warnings == []
 
 
-def test_topics_long_topic_is_split():
-    result = split_lessons(chain([15] * 6 + [40], topics=list("AAAAAAB")), topics())
-    assert ids(result) == [[1, 2, 3], [4, 5, 6], [7]]
-
-
-def test_topics_short_neighbours_are_merged():
-    result = split_lessons(chain([10, 15, 40], topics=list("ABC")), topics())
+def test_topics_short_run_merged_with_smaller_neighbour():
+    # Runs 10 / 40 / 40 min, median 40: A (< 20) joins B.
+    result = split_lessons(chain([10, 40, 40]), topics(), **topical(list("ABC")))
     assert ids(result) == [[1, 2], [3]]
     assert result.lessons[0].topics == ("A", "B")
-    assert codes(result) == ["lesson_time_deviation"]  # 25 min, nothing more to merge
+
+
+def test_topics_short_run_picks_the_smaller_side():
+    # Runs 40 / 5 / 25 / 30 min, median 27.5: B (< 13.75) joins C (25 < 40).
+    result = split_lessons(chain([40, 5, 25, 30]), topics(), **topical(list("ABCD")))
+    assert ids(result) == [[1], [2, 3], [4]]
+
+
+def test_topics_long_run_is_split_evenly():
+    # Runs 80 / 20 / 20 min, median 20: A is 4 × the median → 4 parts of 20 min.
+    result = split_lessons(chain([10] * 8 + [20, 20]), topics(), **topical(list("AAAAAAAABC")))
+    assert ids(result) == [[1, 2], [3, 4], [5, 6], [7, 8], [9], [10]]
+    assert [x.topics for x in result.lessons][:4] == [("A",)] * 4
+
+
+def test_topics_run_under_three_medians_stays():
+    result = split_lessons(chain([25, 25, 20, 20]), topics(), **topical(list("AABC")))
+    assert ids(result) == [[1, 2], [3], [4]]  # 50 min < 3 × 20
+    assert codes(result) == ["lessons_unbalanced"]  # 50 against the mean 30
 
 
 def test_topics_same_topic_in_two_runs():
-    # Prerequisites put topic B between two parts of topic A.
-    result = split_lessons(chain([40, 40, 40], topics=list("ABA")), topics())
+    result = split_lessons(chain([40, 40, 40]), topics(), **topical(list("ABA")))
     assert ids(result) == [[1], [2], [3]]
 
 
-def test_topics_section_without_topic_joins_neighbour():
-    result = split_lessons(chain([20, 20, 20, 20], topics=[None, "A", None, "B"]), topics())
+def test_topics_section_without_similarity_stays_in_its_run():
+    result = split_lessons(chain([20, 20, 20, 20]), topics(), **topical(["A", None, "A", "B"]))
     assert ids(result) == [[1, 2, 3], [4]]
 
 
-def test_topics_long_section_not_merged():
-    result = split_lessons(chain([50, 5], topics=list("AB")), topics())
-    assert ids(result) == [[1], [2]]
-    assert codes(result) == ["section_over_capacity", "lesson_time_deviation"]
+def test_topic_runs_ignore_a_single_weak_change():
+    sections = chain([10, 10, 10, 10])
+    similarity = {1: [0.9, 0.1], 2: [0.9, 0.1], 3: [0.50, 0.55], 4: [0.9, 0.1]}
+    runs = topic_segments(sections, 2, similarity)
+    assert [(topic, [s.id for s in members]) for topic, members in runs] == [(0, [1, 2, 3, 4])]
+    assert section_topics(sections, 2, similarity) == {1: 0, 2: 0, 3: 1, 4: 0}
+
+
+def test_topic_runs_follow_a_clear_change():
+    sections = chain([10, 10, 10, 10])
+    similarity = {1: [0.9, 0.1], 2: [0.9, 0.1], 3: [0.2, 0.9], 4: [0.1, 0.9]}
+    runs = topic_segments(sections, 2, similarity)
+    assert [(topic, [s.id for s in members]) for topic, members in runs] == [(0, [1, 2]), (1, [3, 4])]
+
+
+def test_wrong_similarity_row_is_a_caller_error():
+    with pytest.raises(ValueError):
+        split_lessons(chain([10]), topics(), topics=["A", "B"], topic_similarity={1: [0.5]})
 
 
 # --- order of the questions (e) -------------------------------------------------------------------
 
 
 def test_questions_follow_sections_then_type():
-    result = split_lessons(chain([20, 20, 20]), lessons(count=2))
+    result = split_lessons(chain([20, 20, 20]), lessons(2))
     questions = [
         SplitQuestion("q1", 2, "no_answer"),
         SplitQuestion("q2", 1, "open"),

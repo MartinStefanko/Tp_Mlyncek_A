@@ -36,9 +36,11 @@ def test_question_mapping_and_meta():
     _assert_valid(out)
 
     unit = out.result.units[0]
-    assert unit.title == "bio, chem"
-    assert unit.description == "Tematické celky: Fotosyntéza, Dýchanie"
-    first, second, third = unit.questions
+    # mode single: title and description of the one lesson from the LLM (step 16)
+    assert unit.title == "Hodina 1 – názov"
+    assert unit.description == "Popis hodiny 1."
+    # order of the split: sections in order, in a section choice → open → no_answer
+    third, first, second = unit.questions
     # empty name -> section title; the HTML of the hints is cleaned
     assert (first.name, first.description, first.type) == ("Fotosyntéza", "Čo je to?", "open")
     assert (first.time_to_handle, first.time_to_explain) == (300, 60)
@@ -48,12 +50,13 @@ def test_question_mapping_and_meta():
     assert third.type == "choice" and [c.is_correct for c in third.choices] == [True, False]
 
     meta = out.report.question_meta
-    assert [(m.question, m.section_id, m.bloom_level) for m in meta] == [
-        (0, "S-1", "understand"), (1, "S-2", "create"), (2, "S-1", "understand")]
-    assert meta[2].keywords == ["a", "b"]
-    assert [(s.file, s.pages) for s in meta[0].source] == [("bio.pdf", [2]), ("chem.pdf", [5])]
+    assert [(m.unit, m.question, m.section_id, m.bloom_level) for m in meta] == [
+        (0, 0, "S-1", "understand"), (0, 1, "S-1", "understand"), (0, 2, "S-2", "create")]
+    assert meta[0].keywords == ["a", "b"]
+    assert [(s.file, s.pages) for s in meta[1].source] == [("bio.pdf", [2]), ("chem.pdf", [5])]
     assert out.report.sections[1].prerequisites == ["S-1"]
     assert out.report.sections[0].lo_type == "legacy"
+    assert out.report.timings.pop("split") >= 0
     assert out.report.timings == {"extract": 1.0}
     assert out.report.warnings == [] and out.dropped == 0
 
@@ -97,6 +100,7 @@ def test_quality_topics_warnings_and_timings_from_reports():
     assert out.report.sections[0].topic == "Rastliny" == out.report.question_meta[0].topic
     # diagnostics of the pipeline first, then the output warnings
     assert [w.code for w in out.report.warnings] == ["section_without_questions", "invalid_question"]
+    assert out.report.timings.pop("split") >= 0
     assert out.report.timings == {"extract": 1.0, "learning_objects": 10.0, "lo_evaluation": 2.5,
                                   "questions": 7.0, "q_evaluation": 3.0}
 

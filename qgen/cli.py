@@ -488,8 +488,34 @@ def build_parser():
         default=None,
         help="Minimum questions per section (tematický celok), 1–10; more when the content allows. Default: 3.",
     )
+    parser.add_argument(
+        "--split",
+        type=parse_split,
+        default=None,
+        metavar="JSON",
+        help=(
+            "options.split as JSON, e.g. '{\"mode\": \"topics\"}' or '{\"mode\": \"lessons\", "
+            "\"lesson_count\": 3}'. Given: the output step runs too (lessons, their titles by the "
+            "LLM) and units.json and report.json are written."
+        ),
+    )
     parser.add_argument("--verbose", action="store_true", help="Also print the pipeline's own log lines.")
     return parser
+
+
+def parse_split(text: str):
+    """--split: JSON of options.split (qgen.contract.options.SplitOptions)."""
+    from pydantic import TypeAdapter, ValidationError
+
+    from qgen.contract.options import SplitOptions
+
+    try:
+        return TypeAdapter(SplitOptions).validate_json(text)
+    except ValidationError as error:
+        problems = "; ".join(
+            f"{'.'.join(str(x) for x in e['loc']) or 'split'}: {e['msg']}" for e in error.errors(include_url=False)
+        )
+        raise argparse.ArgumentTypeError(f"invalid split options: {problems}") from None
 
 
 def main(argv=None, llm=None, embedder=None, settings: Settings = None) -> int:
@@ -534,10 +560,27 @@ def main(argv=None, llm=None, embedder=None, settings: Settings = None) -> int:
         per_section=args.per_section,
     )
     write_results(result, args.out, segments=segments)
+    lessons = ""
+    if args.split is not None:
+        from qgen.output import build_output  # qgen.output imports this module
+
+        output = build_output(
+            result,
+            input_names=[item["name"] for item in pdf_inputs],
+            timings={},
+            settings=settings,
+            split=args.split,
+            llm=llm,
+            embedder=embedder,
+            progress_callback=print_progress,
+        )
+        write_json(Path(args.out) / "units.json", output.result.model_dump(mode="json"))
+        write_json(Path(args.out) / "report.json", output.report.model_dump(mode="json"))
+        lessons = f", {len(output.result.units)} lessons"
 
     print(
         f"Done: {len(segments)} pages, {len(result.learning_objects)} LO, "
-        f"{len(result.questions)} questions. Saved to: {Path(args.out).resolve()}"
+        f"{len(result.questions)} questions{lessons}. Saved to: {Path(args.out).resolve()}"
     )
     return 0
 
