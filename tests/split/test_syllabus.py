@@ -36,8 +36,10 @@ def test_without_pages_only_similarity():
     sim = [[0.9, 0.1], [0.2, 0.8], [0.7, 0.3], [0.4, 0.6], [0.1, 0.9], [0.5, 0.5]]
     result = split_lessons(SIX, syllabus(lesson("A"), lesson("B")), syllabus_similarity=sim)
     assert ids(result) == [[1, 3, 6], [2, 4, 5]]  # 6: tie → earlier lesson
-    # Chain 1 → 2 → … : 3 in lesson 1 needs 2 from lesson 2.
-    assert set(codes(result)) == {"prerequisite_order"}
+    # Chain 1 → 2 → … : 3 in lesson 1 needs 2 from lesson 2. No lesson has pages or ids, so
+    # every section is placed by similarity (one warning per lesson).
+    assert set(codes(result)) == {"prerequisite_order", "syllabus_unmentioned_sections"}
+    assert codes(result).count("syllabus_unmentioned_sections") == 2
 
 
 def test_page_tie_decided_by_similarity():
@@ -97,7 +99,28 @@ def test_plan_with_section_ids():
     plan = SyllabusPlan(lessons=[planned("A", section_ids=[1, 2, 3]), planned("B", section_ids=[4, 5, 6])])
     result = split_lessons(SIX, syllabus_text(), plan=plan)
     assert ids(result) == [[1, 2, 3], [4, 5, 6]]
-    assert result.warnings == []
+    assert result.warnings == []  # every section is named by the plan
+
+
+def test_unmentioned_sections_name_their_topics():
+    plan = SyllabusPlan(lessons=[planned("Úročenie", section_ids=[1, 2]), planned("Riziko", section_ids=[5, 6])])
+    sim = [[0.0, 0.0], [0.0, 0.0], [0.9, 0.1], [0.8, 0.2], [0.0, 0.0], [0.0, 0.0]]
+    topic_sim = {1: [1.0, 0.0], 2: [1.0, 0.0], 3: [0.0, 1.0], 4: [0.0, 1.0], 5: [1.0, 0.0], 6: [1.0, 0.0]}
+    result = split_lessons(
+        SIX, syllabus_text(), topics=["Úrok", "Anuity"], topic_similarity=topic_sim,
+        syllabus_similarity=sim, plan=plan,
+    )
+    assert ids(result) == [[1, 2, 3, 4], [5, 6]]
+    unmentioned = [w for w in result.warnings if w.code == "syllabus_unmentioned_sections"]
+    assert [w.message for w in unmentioned] == [
+        "Lesson 1 (Úročenie): sections the syllabus does not mention were added by similarity: "
+        "S-3 (Anuity), S-4 (Anuity)."
+    ]
+
+
+def test_teacher_list_covering_every_page_has_no_unmentioned_warning():
+    split = syllabus(lesson("A", "D1:1-3"), lesson("B", "D1:4-6"))
+    assert "syllabus_unmentioned_sections" not in codes(split_lessons(SIX, split))
 
 
 def test_text_plan_moves_section_after_its_prerequisite():
@@ -184,7 +207,9 @@ def test_unmentioned_sections_by_pages_or_similarity():
     sim = [[0.0, 0.0], [0.0, 0.0], [0.9, 0.1], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
     result = split_lessons(SIX, syllabus_text(), syllabus_similarity=sim, plan=plan)
     assert ids(result) == [[1, 2, 3], [4, 5, 6]]
-    assert result.warnings == []
+    # 3 placed by similarity → warned; 4–6 matched by pages of lesson B → mentioned
+    assert [w.code for w in result.warnings] == ["syllabus_unmentioned_sections"]
+    assert result.warnings[0].message.startswith("Lesson 1 (A):") and result.warnings[0].message.endswith(": S-3.")
 
 
 def test_lesson_by_ids_does_not_take_sections_by_pages():

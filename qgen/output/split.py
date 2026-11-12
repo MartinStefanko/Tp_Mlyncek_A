@@ -8,7 +8,9 @@
     split         qgen.split.split_lessons + order_questions
     titles        title and description of every lesson by the LLM, all lessons in calls of
                   QGEN_SPLIT_TITLE_BATCH_SIZE (also mode single: one lesson). Syllabus lessons
-                  keep the teacher's title (and description, if given). A failed call →
+                  keep the title; the teacher's list also its description, if given; a plan from
+                  syllabus_text always gets the description from the LLM (the plan's description
+                  is only a base in the prompt). A failed call →
                   titles from topics / sections, lesson_titles_failed. The job never fails here.
 """
 
@@ -169,6 +171,8 @@ def run_split(
     )
     texts, title_warnings = _lesson_texts(
         result, by_id, input_names=input_names, language=language, settings=settings, llm=llm, progress=progress,
+        # a plan the LLM made from syllabus_text: its descriptions are only a base for the prompt
+        plan_from_text=split.mode == "syllabus" and split.syllabus is None,
         # mode single: the one lesson holds the whole document, so all its topics
         document_topics=tuple(topics) if split.mode == "single" else None,
     )
@@ -262,14 +266,28 @@ def make_syllabus_plan(
 
 
 def _lesson_texts(
-    result: SplitResult, by_id, *, input_names, language, settings, llm, progress, document_topics=None
+    result: SplitResult, by_id, *, input_names, language, settings, llm, progress, document_topics=None,
+    plan_from_text: bool = False,
 ) -> tuple[list[LessonText], list[ReportWarning]]:
+    """Title and description of every lesson.
+
+    The teacher's list (split.syllabus): its title and description are kept; the LLM writes only
+    a missing description. A plan made from syllabus_text: the title is kept, the plan's
+    description goes to the prompt only as a base and the LLM always writes the description
+    for the whole content of the lesson.
+    """
     teacher: list[tuple[Optional[str], Optional[str]]] = []
+    plan_descriptions: list[Optional[str]] = []
     for lesson in result.lessons:
         planned = None
         if result.plan is not None and lesson.syllabus_index is not None:
             planned = result.plan.lessons[lesson.syllabus_index]
-        teacher.append((planned.title, planned.description) if planned else (None, None))
+        if planned is not None and plan_from_text:
+            teacher.append((planned.title, None))
+            plan_descriptions.append(planned.description)
+        else:
+            teacher.append((planned.title, planned.description) if planned else (None, None))
+            plan_descriptions.append(None)
 
     asked = [
         LessonPromptItem(
@@ -277,6 +295,7 @@ def _lesson_texts(
             topics=document_topics or lesson.topics,
             teacher_title=teacher[number - 1][0],
             section_titles=tuple(by_id[sid]["vzdelavaci_objekt"] for sid in lesson.section_ids),
+            plan_description=plan_descriptions[number - 1],
         )
         for number, lesson in enumerate(result.lessons, start=1)
         if not teacher[number - 1][1]  # the teacher's description is kept, no call for it

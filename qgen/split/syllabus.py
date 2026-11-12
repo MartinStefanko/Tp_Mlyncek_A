@@ -8,7 +8,9 @@ algorithm) or only lesson_minutes ("hodiny po 90 minút": the length of a lesson
 the split goes by topics with a warning).
 
 `assign_sections` applies a plan with lessons. A bad plan never raises: unknown ids and
-duplicates are warnings; a plan that leaves no lesson with a section is reported as
+duplicates are warnings; sections the plan does not mention (neither by id nor by a page of a
+lesson) go to the most similar lesson and are listed in `SyllabusAssignment.unmentioned`
+(the caller warns `syllabus_unmentioned_sections`); a plan that leaves no lesson with a section is reported as
 `SyllabusAssignment.fallback_reason` (the caller then splits by topics).
 """
 
@@ -91,6 +93,8 @@ class SyllabusAssignment:
     groups: list[tuple[int, list[SplitSection]]]  # (index in plan.lessons, sections in order)
     skipped: list[int] = field(default_factory=list)
     fallback_reason: Optional[str] = None
+    # sections the plan did not mention, placed by similarity (ids, order of step a)
+    unmentioned: list[int] = field(default_factory=list)
 
 
 def check_plan_ids(
@@ -174,6 +178,7 @@ def assign_sections(
         if lesson.pages is not None and not lesson.section_ids
     }
     lesson_of: dict[int, int] = {}
+    unmentioned: list[int] = []
     for section in ordered:
         if section.id in skipped:
             continue
@@ -191,6 +196,7 @@ def assign_sections(
                     f"similarity is needed for section {section.id}: no page of it is in the syllabus"
                 )
             candidates = list(range(len(plan.lessons)))
+            unmentioned.append(section.id)
         lesson_of[section.id] = min(candidates, key=lambda i: (-(row[i] if row is not None else 0.0), i))
 
     if move_after_prerequisites:
@@ -208,7 +214,9 @@ def assign_sections(
                     message=f"Syllabus lesson {index + 1} got no section; it is left out.",
                 )
             )
-    result = SyllabusAssignment(groups=groups, skipped=[s.id for s in ordered if s.id in skipped])
+    result = SyllabusAssignment(
+        groups=groups, skipped=[s.id for s in ordered if s.id in skipped], unmentioned=unmentioned
+    )
     if not groups:
         result.fallback_reason = "no lesson of the syllabus got a section"
     return result

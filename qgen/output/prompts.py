@@ -34,6 +34,8 @@ class LessonPromptItem:
     topics: tuple[str, ...]  # topics of the lesson (mode single: all topics of the document)
     teacher_title: Optional[str]
     section_titles: tuple[str, ...]
+    # description from a plan made of syllabus_text: only a base, the LLM writes the description
+    plan_description: Optional[str] = None
 
 
 PLAN_SK = """
@@ -158,8 +160,14 @@ Lessons:
 """
 
 _LABELS = {
-    "sk": {"lesson": "Hodina", "topic": "Témy", "teacher": "Názov od učiteľa", "sections": "Tematické celky"},
-    "en": {"lesson": "Lesson", "topic": "Topics", "teacher": "Teacher's title", "sections": "Sections"},
+    "sk": {
+        "lesson": "Hodina", "topic": "Témy", "teacher": "Názov od učiteľa", "sections": "Tematické celky",
+        "plan": "Popis z plánu (iba podklad; popis napíš podľa celého obsahu hodiny)",
+    },
+    "en": {
+        "lesson": "Lesson", "topic": "Topics", "teacher": "Teacher's title", "sections": "Sections",
+        "plan": "Description from the plan (only a base; write the description for the whole content of the lesson)",
+    },
 }
 
 
@@ -192,6 +200,9 @@ def build_titles_prompt(lessons: Sequence[LessonPromptItem], language: str) -> s
             lines.append(f"{labels['topic']}: {'; '.join(_one_line(t) for t in lesson.topics)}")
         if lesson.teacher_title:
             lines.append(f"{labels['teacher']}: {_one_line(lesson.teacher_title)}")
+        if lesson.plan_description:
+            # only in the lesson block (the template stays as recorded for the other modes)
+            lines.append(f"{labels['plan']}: {_one_line(lesson.plan_description)}")
         lines.append(f"{labels['sections']}:")
         lines.extend(f"- {_one_line(title)}" for title in lesson.section_titles)
         blocks.append("\n".join(lines))

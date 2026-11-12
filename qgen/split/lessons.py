@@ -252,7 +252,39 @@ def _syllabus_mode(sections, ordered, split, similarity, plan, known, warnings, 
         plan=plan,
     )
     _warn_skipped(result)
+    _warn_unmentioned(result, plan, assignment.unmentioned, known)
     return result
+
+
+def _warn_unmentioned(result: SplitResult, plan: SyllabusPlan, unmentioned: Sequence[int], known: _Topics) -> None:
+    """One warning per lesson that got sections the plan did not mention (placed by similarity)."""
+    extra = set(unmentioned)
+    for number, lesson in enumerate(result.lessons, start=1):
+        added = [sid for sid in lesson.section_ids if sid in extra]
+        if not added:
+            continue
+        title = plan.lessons[lesson.syllabus_index].title if lesson.syllabus_index is not None else ""
+        labels = []
+        for sid in added:
+            topic = _section_topic(sid, known)
+            labels.append(f"{section_label(sid)} ({topic})" if topic else section_label(sid))
+        result.warnings.append(
+            ReportWarning(
+                code="syllabus_unmentioned_sections",
+                message=(
+                    f"Lesson {number} ({' '.join(title.split())}): sections the syllabus does not mention were "
+                    f"added by similarity: {', '.join(labels)}."
+                ),
+            )
+        )
+
+
+def _section_topic(section_id: int, known: _Topics) -> Optional[str]:
+    """The most similar document topic of a section (as Section.topic in the report)."""
+    row = known.similarity.get(section_id) if known.similarity is not None else None
+    if not known.names or row is None:
+        return None
+    return known.names[max(range(len(known.names)), key=lambda k: (row[k], -k))]
 
 
 def _fallback(ordered, known, warnings, reason: str) -> SplitResult:

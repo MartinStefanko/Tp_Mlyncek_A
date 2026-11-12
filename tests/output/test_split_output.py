@@ -228,7 +228,11 @@ def test_syllabus_text_becomes_a_plan():
     out = run(text_split(), llm=llm)
     assert unit_sections(out) == [["S-2", "S-3"], ["S-4"]]
     assert [u.title for u in out.result.units] == ["Úrok a anuity", "Riziko"]
-    assert out.result.units[1].description == "Zdroje rizika."
+    # the plan's description is only a base: the LLM writes the description of every lesson
+    assert [u.description for u in out.result.units] == ["Popis hodiny 1.", "Popis hodiny 2."]
+    (titles_prompt,) = title_calls(llm)
+    assert "Popis z plánu (iba podklad; popis napíš podľa celého obsahu hodiny): Zdroje rizika." in titles_prompt
+    assert "Názov od učiteľa: Riziko" in titles_prompt
     assert len(plan_calls(llm)) == 1
     assert "syllabus_skipped_sections" in codes(out)
 

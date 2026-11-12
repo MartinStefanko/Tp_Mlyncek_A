@@ -202,6 +202,7 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Windows: `atomic_write_bytes` opakuje `os.replace` pri PermissionError (antivírus drží súbor),
   najviac 10×; na Linuxe nie.
 - Kódy varovaní: prerequisite_cycle, prerequisite_order, prerequisite_moved, lesson_count_reduced, lessons_unbalanced,
+  syllabus_unmentioned_sections,
   no_document_topics, empty_lesson, no_questions, syllabus_unknown_section,
   syllabus_duplicate_section, syllabus_skipped_sections, syllabus_fallback, syllabus_plan_invalid,
   syllabus_lesson_minutes_ignored, lesson_titles_failed.
@@ -226,3 +227,14 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Historické metrics.json (baseline_v2, _v4_parallel, _v4_par8) ostávajú v gite (dôkazy pre prácu).
 - `tools/smoke_test.py` (projekt `qgen-smoke`, port 18000, replay, `--real` iba ručne).
 - Success metric ±20 % dĺžky hodiny neplatí (variant A z kroku 16: kapacita hodiny neexistuje).
+
+## Úprava sylabu (po kroku 17)
+- Plán zo `syllabus_text`: názov hodiny z plánu ostáva, `description` z plánu ide do promptu
+  názvov iba ako podklad (riadok „Popis z plánu (iba podklad; …)“ v bloku hodiny, šablóna
+  promptu sa nemení, takže nahrávky single/topics/lessons3 platia) a popis vždy napíše LLM
+  podľa celého obsahu hodiny; pri zlyhaní záložný popis zo zoznamu celkov, nie z plánu.
+  Zoznam od učiteľa (`split.syllabus`): jeho názov aj popis sa nemenia (ako doteraz).
+- Celky, ktoré plán nespomenul (ani id, ani strana hodiny) a dostali sa do hodiny podľa
+  podobnosti: priradenie ostáva, varovanie `syllabus_unmentioned_sections` pre každú takú
+  hodinu (číslo, názov, „S-id (téma)“; téma = najpodobnejšia téma celku). Platí pre text aj
+  zoznam od učiteľa (aj plán bez strán a id → varovanie pri každej hodine).

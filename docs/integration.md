@@ -110,9 +110,14 @@ Sylabus ako zoznam (`syllabus` alebo `syllabus_text`, práve jedno):
 }
 ```
 
-`pages`: `D1` = prvý nahratý súbor, `D2` = druhý … (podľa poradia v `files`). Strany
-nepokryté žiadnou hodinou sa vynechajú (`syllabus_skipped_sections`). `D3` pri dvoch
-súboroch → 400 `invalid_options`.
+`pages`: `D1` = prvý nahratý súbor, `D2` = druhý … (podľa poradia v `files`). Tematický
+celok, ktorého strany nie sú v žiadnej hodine, služba pridá k najpodobnejšej hodine a ohlási
+to varovaním `syllabus_unmentioned_sections`. `D3` pri dvoch súboroch → 400 `invalid_options`.
+Názov a popis hodiny od učiteľa sa nemenia; chýbajúci popis napíše LLM.
+
+Pri `syllabus_text` ostáva názov hodiny z textu učiteľa, popis však vždy napíše LLM podľa
+celého obsahu hodiny. Celky, ktoré text nespomenul (napr. anuity pri „najprv úročenie,
+potom riziko“), sa priradia k najpodobnejšej hodine s varovaním `syllabus_unmentioned_sections`.
 
 ### Príklad volania (PHP, Laravel HTTP klient)
 
@@ -251,7 +256,8 @@ Varovania sú iba v reporte (`GET /v1/jobs/{id}/report`, pole `warnings[]` s `co
 | `no_questions` | Z dokumentu sa nepodarilo vytvoriť žiadnu otázku. |
 | `syllabus_fallback` | Sylabus sa nedal použiť, hodiny sú rozdelené podľa tém dokumentu. |
 | `syllabus_plan_invalid` | Text sylabu sa nepodarilo previesť na hodiny, hodiny sú rozdelené podľa tém. |
-| `syllabus_skipped_sections` | Časti dokumentu, ktoré sylabus nepokrýva, sú vynechané. |
+| `syllabus_skipped_sections` | Časti dokumentu, ktoré sylabus vynechal, nie sú v žiadnej hodine. |
+| `syllabus_unmentioned_sections` | Hodina „…“ obsahuje aj učivo, ktoré sylabus nespomenul (napr. anuity); bolo priradené k najpodobnejšej hodine. Skontrolujte rozdelenie. |
 | `syllabus_unknown_section` / `syllabus_duplicate_section` | Sylabus odkazuje na neexistujúcu alebo opakovanú časť; bola ignorovaná. |
 | `syllabus_lesson_minutes_ignored` | Dĺžka hodiny v sylabe sa nepoužíva, hodiny sú podľa tém. |
 | `prerequisite_order` | Poradie v sylabe nedodržiava nadväznosť učiva (niečo sa preberá skôr ako jeho základ). |

@@ -102,15 +102,16 @@ neurčuje zo súčtu časov otázok (otázky sú zásobník pre učiteľa). Vo v
 | `single` (predvolený) | `{"mode": "single"}` | jedna hodina, názov a popis od LLM | – |
 | `lessons` | `{"mode": "lessons", "lesson_count": 3}` | presne N hodín (1–100), čo najrovnomernejšie, rezy radšej na hraniciach tém | `lesson_count_reduced`, `lessons_unbalanced` |
 | `topics` | `{"mode": "topics"}` | hodina = téma dokumentu; malé témy spojí, veľké rozdelí | `no_document_topics`, `lessons_unbalanced` |
-| `syllabus` + zoznam | `{"mode": "syllabus", "syllabus": [{"title": "Úrokovanie", "pages": "D1:1-20"}, {"title": "Anuity", "pages": "D1:21-40"}]}` | hodiny učiteľa: `title`, voliteľne `description` a `pages` (`D1` = prvý súbor) | `syllabus_skipped_sections`, `syllabus_unknown_section`, `syllabus_duplicate_section`, `prerequisite_order` |
-| `syllabus` + text | `{"mode": "syllabus", "syllabus_text": "3 hodiny: najprv úrokovanie, potom anuity, perpetuity vynechaj"}` | LLM prevedie voľný text (≤ 4000 znakov) na zoznam hodín | `syllabus_plan_invalid`, `syllabus_fallback`, `syllabus_lesson_minutes_ignored`, `prerequisite_moved` |
+| `syllabus` + zoznam | `{"mode": "syllabus", "syllabus": [{"title": "Úrokovanie", "pages": "D1:1-20"}, {"title": "Anuity", "pages": "D1:21-40"}]}` | hodiny učiteľa: `title`, voliteľne `description` a `pages` (`D1` = prvý súbor); celky mimo strán idú k najpodobnejšej hodine | `syllabus_unmentioned_sections`, `syllabus_unknown_section`, `syllabus_duplicate_section`, `prerequisite_order` |
+| `syllabus` + text | `{"mode": "syllabus", "syllabus_text": "3 hodiny: najprv úrokovanie, potom anuity, perpetuity vynechaj"}` | LLM prevedie voľný text (≤ 4000 znakov) na zoznam hodín; názov z plánu ostáva, popis vždy napíše LLM podľa celej hodiny; nespomenuté celky idú k najpodobnejšej hodine | `syllabus_unmentioned_sections`, `syllabus_skipped_sections`, `syllabus_plan_invalid`, `syllabus_fallback`, `syllabus_lesson_minutes_ignored`, `prerequisite_moved` |
 
 - `syllabus` vyžaduje práve jedno z `syllabus` a `syllabus_text`.
 - Ak sa sylabus nedá použiť, služba rozdelí hodiny podľa tém (`topics`) a pridá varovanie;
   úloha kvôli rozdeleniu nikdy nezlyhá.
 - `lesson_minutes` sa prijme vo všetkých režimoch, ale nemá vplyv.
-- Názvy a popisy hodín píše LLM (v režime `syllabus` iba chýbajúci popis). Ak zlyhá, použijú
-  sa názvy tém (`lesson_titles_failed`).
+- Názvy a popisy hodín píše LLM. V režime `syllabus` ostáva názov hodiny; pri zozname od učiteľa
+  aj jeho popis (LLM píše iba chýbajúci), pri `syllabus_text` píše popis vždy LLM. Ak volanie
+  zlyhá, použijú sa názvy tém (`lesson_titles_failed`).
 
 Ďalšie nastavenia (`language`, `extraction.ocr`, `questions.*`) sú v
 [docs/integration.md](docs/integration.md#3-formát-options) a v `GET /v1/schema/options`.
