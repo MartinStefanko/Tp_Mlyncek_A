@@ -40,6 +40,18 @@ def test_models_come_from_the_settings(baseline):
     }
 
 
+def test_pipeline_runs_with_the_recorded_concurrency(baseline):
+    """The pipeline gets the concurrency of the settings, the same value run_info records;
+    other pipeline parameters stay at the code defaults."""
+    env = _env_settings(llm_model="m", llm_max_concurrency=2, question_generation_batch_size=5)
+    models = baseline.select_models(env, app_models=False)
+    settings = Settings.model_construct(**baseline.pipeline_overrides(env, models))
+    run = baseline.run_info(env, "settings", datetime(2026, 1, 1, tzinfo=timezone.utc), {})
+    assert settings.llm_max_concurrency == run["llm_max_concurrency"] == 2
+    assert settings.question_generation_batch_size == Settings.model_fields["question_generation_batch_size"].default
+    assert settings.llm_model == "m"
+
+
 def test_app_models_keep_the_former_fixed_models(baseline):
     models = baseline.select_models(_env_settings(llm_model="new-lite"), app_models=True)
     assert models == baseline.APP_MODELS

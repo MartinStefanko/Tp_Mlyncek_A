@@ -11,8 +11,10 @@ Models: by default every role takes its model from the settings (.env / environm
 get_settings()), like the CLI: QGEN_LLM_MODEL, _LO, _QUESTIONS, _EVAL and QGEN_EMBED_MODEL.
 --app-models uses the fixed models of the former app.py instead (APP_MODELS; Gemini 2.5,
 which Google no longer offers to new users). Provider and keys always come from the
-settings. Thresholds, batch sizes and attempts stay at the code defaults (= app.py values),
-so .env cannot change them. Before the run the tool prints the model of every role and
+settings. So does the concurrency (QGEN_LLM_MAX_CONCURRENCY): the pipeline runs with the
+value that metrics.json records in run.llm_max_concurrency. Thresholds, batch sizes and
+attempts stay at the code defaults (= app.py values), so .env cannot change them. Before the
+run the tool prints the model of every role and
 calls factory.check_config().
 
 Split into lessons (step 16): --split JSON (options.split) also runs the output step
@@ -132,6 +134,12 @@ def select_models(env_settings: Settings, app_models: bool) -> dict:
     if app_models:
         return dict(APP_MODELS)
     return {field: getattr(env_settings, field) for field in MODEL_FIELDS}
+
+
+def pipeline_overrides(env_settings: Settings, models: dict) -> dict:
+    """Settings fields of the pipeline that differ from the code defaults: the chosen models and
+    the concurrency of the settings, which run_info records (run.llm_max_concurrency)."""
+    return {**models, "llm_max_concurrency": env_settings.llm_max_concurrency}
 
 
 def models_by_role(settings: Settings) -> dict:
@@ -495,8 +503,10 @@ def main(argv=None) -> int:
     env_settings = get_settings()
     models = select_models(env_settings, args.app_models)
     run_settings = env_settings.model_copy(update=models)
-    # Pipeline parameters: code defaults (= app.py values) plus the chosen models.
-    settings = Settings.model_construct(**models)
+    # Pipeline parameters: code defaults (= app.py values) plus the chosen models and the
+    # concurrency of the settings (the value run_info writes to metrics.json).
+    settings = Settings.model_construct(**pipeline_overrides(env_settings, models))
+    print(f"LLM concurrency: {settings.llm_max_concurrency}")
 
     source = "app.py (--app-models)" if args.app_models else "settings (.env / environment)"
     print(f"Models from {source}; LLM provider {run_settings.llm_provider}, "

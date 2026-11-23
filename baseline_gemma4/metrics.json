@@ -1,0 +1,472 @@
+{
+  "created_at": "2026-11-23T15:43:57+00:00",
+  "run": {
+    "started_at": "2026-11-23T15:30:19+00:00",
+    "git_commit": "3810439c5d7a53d866a5ae0b8e006e45a5364e0e",
+    "git_dirty": false,
+    "models_source": "settings",
+    "llm_provider": "openai_compatible",
+    "embed_provider": "gemini",
+    "llm_max_concurrency": 4,
+    "models_by_role": {
+      "lo": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "prereq": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "questions": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "eval": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "check": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "topics": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "split": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "embed": "gemini-embedding-001"
+    }
+  },
+  "inputs": [
+    {
+      "name": "eko.pdf",
+      "sha256": "69075eae95e33be4fa3ef5938a4f7f61079477b37b623aae24c59a595ecf15e0"
+    }
+  ],
+  "models": {
+    "lo_generation": "nvidia/Gemma-4-26B-A4B-NVFP4",
+    "lo_prerequisites": "nvidia/Gemma-4-26B-A4B-NVFP4",
+    "item_generation": "nvidia/Gemma-4-26B-A4B-NVFP4",
+    "item_evaluation": "nvidia/Gemma-4-26B-A4B-NVFP4",
+    "item_evaluation_batch_size": 20,
+    "lo_batch_size": 10,
+    "item_batch_size": 3
+  },
+  "document_language": "sk",
+  "topic_coverage": {
+    "coverage_percent": 85.71,
+    "topics_total": 7,
+    "topics_covered": 6,
+    "similarity_threshold": 0.72
+  },
+  "lo_faithfulness": {
+    "average_faithfulness_score": 4.9559,
+    "los_evaluated": 68
+  },
+  "lo_relevance_to_segment": {
+    "average_similarity": 0.7887
+  },
+  "item_faithfulness": {
+    "average_faithfulness_score": 4.9547,
+    "items_evaluated": 265,
+    "faithful_items_percent": 98.87
+  },
+  "item_answerability": {
+    "average_answerability_score": 4.7774,
+    "items_evaluated": 265,
+    "answerable_items_percent": 92.83
+  },
+  "item_relevance_to_lo": {
+    "average_similarity": 0.7772
+  },
+  "counts": {
+    "pages": 69,
+    "los_all": 68,
+    "los_accepted": 68,
+    "items_all": 283,
+    "items_accepted": 244
+  },
+  "timings_seconds": {
+    "extraction": 0.7016,
+    "lo_pipeline_wall": 44.7151,
+    "lo_generation": 28.941,
+    "lo_evaluation": 15.1986,
+    "item_pipeline_wall": 772.657,
+    "item_generation": 346.9821,
+    "item_evaluation": 425.3305,
+    "total_wall": 818.1208
+  },
+  "llm_calls": {
+    "by_method": {
+      "generate_content": 122,
+      "embed_content": 61
+    },
+    "failed": 2
+  },
+  "questions": {
+    "settings": {
+      "question_generation_batch_size": 3,
+      "question_extra_rounds": 1,
+      "question_coverage_rounds": 2,
+      "question_dedup_threshold": 0.94,
+      "llm_temperature": 0.2,
+      "llm_max_output_tokens": 32768
+    },
+    "types_generated": {
+      "choice": 215,
+      "open": 67,
+      "no_answer": 1
+    },
+    "types_accepted": {
+      "choice": 184,
+      "open": 59,
+      "no_answer": 1
+    },
+    "practical_accepted": 45,
+    "extra_rounds_run": 1,
+    "extra_rounds": [
+      {
+        "round": 1,
+        "calls": 23,
+        "sections": 64,
+        "questions_added": 49,
+        "sections_continuing": 33
+      }
+    ],
+    "generation_calls": {
+      "initial": 24,
+      "extra": 23,
+      "coverage": 10
+    },
+    "coverage_rounds": [
+      {
+        "round": 1,
+        "sections": [
+          8,
+          9,
+          19,
+          20,
+          31,
+          32,
+          36,
+          41,
+          44,
+          45,
+          50,
+          54,
+          56
+        ],
+        "sections_without_questions": [
+          8,
+          9,
+          44,
+          45
+        ],
+        "calls": 7,
+        "questions_added": 17,
+        "sections_filled": [
+          8,
+          9,
+          36,
+          44,
+          45,
+          50,
+          54
+        ],
+        "sections_still_below": [
+          19,
+          20,
+          31,
+          32,
+          36,
+          41,
+          56
+        ]
+      },
+      {
+        "round": 2,
+        "sections": [
+          19,
+          20,
+          31,
+          32,
+          36,
+          41,
+          56
+        ],
+        "sections_without_questions": [],
+        "calls": 3,
+        "questions_added": 3,
+        "sections_filled": [
+          36,
+          56
+        ],
+        "sections_still_below": [
+          19,
+          20,
+          31,
+          32,
+          41
+        ]
+      }
+    ],
+    "sections_still_below": [
+      19,
+      20,
+      31,
+      32,
+      41
+    ],
+    "batch_splits": 1,
+    "duplicates_removed": 16,
+    "wrong_choice_marking": 1
+  },
+  "section_diagnostics": {
+    "sections_generated": 79,
+    "sections_after_clustering": 68,
+    "sections_accepted": 68
+  },
+  "question_diagnostics": {
+    "per_section_minimum": 3,
+    "question_options": {
+      "types": [
+        "choice",
+        "open",
+        "no_answer"
+      ],
+      "per_section": 3,
+      "choice_options": 4,
+      "hints": 2
+    },
+    "sections_total": 68,
+    "questions_generated": 283,
+    "questions_accepted": 244,
+    "questions_per_section": {
+      "generated": {
+        "min": 3,
+        "avg": 4.16,
+        "max": 8
+      },
+      "accepted": {
+        "min": 2,
+        "avg": 3.59,
+        "max": 7
+      }
+    },
+    "question_types": {
+      "generated": {
+        "choice": 215,
+        "open": 67,
+        "no_answer": 1
+      },
+      "accepted": {
+        "choice": 184,
+        "open": 59,
+        "no_answer": 1
+      },
+      "practical_accepted": 45
+    },
+    "questions_by_origin": {
+      "initial": 194,
+      "extra_1": 53,
+      "coverage": 24,
+      "coverage_2": 12
+    },
+    "generation_calls": {
+      "initial": 24,
+      "extra": 23,
+      "coverage": 10
+    },
+    "extra_rounds": {
+      "configured": 1,
+      "rounds_run": 1,
+      "rounds": [
+        {
+          "round": 1,
+          "calls": 23,
+          "sections": 64,
+          "questions_added": 49,
+          "sections_continuing": 33
+        }
+      ]
+    },
+    "batch_splits": 1,
+    "dedup_threshold": 0.94,
+    "duplicates_removed": {
+      "total": 16,
+      "by_origin": {
+        "extra_1": 4,
+        "initial": 1,
+        "coverage": 3,
+        "coverage_2": 8
+      }
+    },
+    "wrong_choice_marking": 1,
+    "times_clamped": 9,
+    "validation_warnings": {},
+    "supplementary_call": {
+      "rounds_configured": 2,
+      "sections_missing": [
+        8,
+        9,
+        19,
+        20,
+        31,
+        32,
+        36,
+        41,
+        44,
+        45,
+        50,
+        54,
+        56
+      ],
+      "calls": 10,
+      "sections_filled": [
+        8,
+        9,
+        36,
+        44,
+        45,
+        50,
+        54,
+        56
+      ],
+      "sections_still_below": [
+        19,
+        20,
+        31,
+        32,
+        41
+      ],
+      "rounds": [
+        {
+          "round": 1,
+          "sections": [
+            8,
+            9,
+            19,
+            20,
+            31,
+            32,
+            36,
+            41,
+            44,
+            45,
+            50,
+            54,
+            56
+          ],
+          "sections_without_questions": [
+            8,
+            9,
+            44,
+            45
+          ],
+          "calls": 7,
+          "questions_added": 17,
+          "sections_filled": [
+            8,
+            9,
+            36,
+            44,
+            45,
+            50,
+            54
+          ],
+          "sections_still_below": [
+            19,
+            20,
+            31,
+            32,
+            36,
+            41,
+            56
+          ]
+        },
+        {
+          "round": 2,
+          "sections": [
+            19,
+            20,
+            31,
+            32,
+            36,
+            41,
+            56
+          ],
+          "sections_without_questions": [],
+          "calls": 3,
+          "questions_added": 3,
+          "sections_filled": [
+            36,
+            56
+          ],
+          "sections_still_below": [
+            19,
+            20,
+            31,
+            32,
+            41
+          ]
+        }
+      ]
+    },
+    "items_dropped": {
+      "total": 39,
+      "by_reason": {
+        "missing_lo_id": 0,
+        "invalid_item_shape": 0,
+        "validation": 2,
+        "type_not_allowed": 0,
+        "type_rule": 0,
+        "duplicate": 16,
+        "low_score": 20,
+        "wrong_choice_marking": 1,
+        "unknown_lo_id": 0
+      }
+    },
+    "warnings": [
+      {
+        "code": "section_below_minimum",
+        "message": "Section 19 has 2 question(s), fewer than per_section 3, after 2 coverage round(s)",
+        "section_id": 19,
+        "questions": 2,
+        "per_section": 3
+      },
+      {
+        "code": "section_below_minimum",
+        "message": "Section 20 has 2 question(s), fewer than per_section 3, after 2 coverage round(s)",
+        "section_id": 20,
+        "questions": 2,
+        "per_section": 3
+      },
+      {
+        "code": "section_below_minimum",
+        "message": "Section 31 has 2 question(s), fewer than per_section 3, after 2 coverage round(s)",
+        "section_id": 31,
+        "questions": 2,
+        "per_section": 3
+      },
+      {
+        "code": "section_below_minimum",
+        "message": "Section 32 has 2 question(s), fewer than per_section 3, after 2 coverage round(s)",
+        "section_id": 32,
+        "questions": 2,
+        "per_section": 3
+      },
+      {
+        "code": "section_below_minimum",
+        "message": "Section 41 has 2 question(s), fewer than per_section 3, after 2 coverage round(s)",
+        "section_id": 41,
+        "questions": 2,
+        "per_section": 3
+      },
+      {
+        "code": "choice_marking_wrong",
+        "message": "Question 272 (section 66) dropped: option(s) A marked wrongly",
+        "section_id": 66,
+        "question_id": 272
+      },
+      {
+        "code": "choice_share_low",
+        "message": "11 section(s) have less than 60 % choice questions: [3, 12, 19, 24, 26, 30, 33, 34, 39, 44, 56]",
+        "section_ids": [
+          3,
+          12,
+          19,
+          24,
+          26,
+          30,
+          33,
+          34,
+          39,
+          44,
+          56
+        ]
+      }
+    ]
+  }
+}
