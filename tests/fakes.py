@@ -25,7 +25,7 @@ from collections import deque
 from typing import Any, Iterable, Optional
 
 from qgen.llm.base import LLMResponse
-from qgen.llm.errors import LLMTimeoutError, OutputTruncatedError, ProviderError, RateLimitError
+from qgen.llm.errors import DegenerateOutputError, LLMTimeoutError, OutputTruncatedError, ProviderError, RateLimitError
 
 INVALID_JSON = "Sorry, here is no JSON {"
 EMPTY_ITEMS = '{"items": []}'
@@ -49,6 +49,10 @@ def timed_out() -> LLMTimeoutError:
 
 def truncated() -> OutputTruncatedError:
     return OutputTruncatedError("fake answer cut off at the token limit")
+
+
+def degenerated() -> DegenerateOutputError:
+    return DegenerateOutputError("fake answer degenerated into whitespace")
 
 
 def items(rows) -> str:

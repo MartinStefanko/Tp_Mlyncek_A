@@ -121,7 +121,9 @@ Stĺpec „Prod.“: **áno** = treba nastaviť pri nasadení.
 | `QGEN_LLM_MODEL_QUESTIONS` | = `QGEN_LLM_MODEL` | | Generovanie otázok. |
 | `QGEN_LLM_MODEL_EVAL` | `gemini-3.5-flash` | | Skóre kvality otázok (silnejší model). Pri inom poskytovateľovi ho treba zmeniť. |
 | `QGEN_LLM_MAX_TOKENS` | `8192` | | Anthropic: `max_tokens` volania. |
-| `QGEN_LLM_MAX_OUTPUT_TOKENS` | `32768` | | Limit výstupu pri generovaní otázok. |
+| `QGEN_LLM_MAX_OUTPUT_TOKENS` | `32768` | | Limit výstupu pri generovaní otázok. Celok, ktorý sa nezmestí, ostane bez otázok (skúsia ho kolá doplnenia pokrytia). |
+| `QGEN_LLM_MAX_WHITESPACE_RUN` | `500` | | Toľko medzier / nových riadkov za sebou = zdegenerovaná odpoveď (lokálny model v JSON režime); volanie sa zopakuje. |
+| `QGEN_LLM_STREAM` | `true` | | `openai_compatible`: odpoveď sa číta priebežne, zdegenerovaná sa preruší hneď, nie až na limite tokenov. |
 | `QGEN_LLM_TEMPERATURE` | `0.2` | | Teplota (Anthropic ju nedostane). |
 | `QGEN_LLM_MAX_CONCURRENCY` | `4` | | Súbežné volania LLM jedného workera. |
 | `QGEN_LLM_RETRIES` | `5` | | Pokusy jedného volania (429, 5xx, timeout). |

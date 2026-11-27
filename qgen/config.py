@@ -86,6 +86,14 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = Field(
         default=32768, ge=1, description="Output token limit of question generation calls (all providers)."
     )
+    llm_max_whitespace_run: int = Field(
+        default=500, ge=50,
+        description="An answer with this many whitespace characters in a row has degenerated (retried).",
+    )
+    llm_stream: bool = Field(
+        default=True,
+        description="openai_compatible: read answers as a stream and stop a degenerated answer early.",
+    )
     llm_temperature: float = Field(default=0.2, ge=0, le=2, description="Sent with every call (not to Anthropic).")
     llm_max_concurrency: int = Field(default=4, ge=1, description="Parallel LLM calls of one worker.")
     llm_retries: int = Field(default=5, ge=1, description="Attempts of one LLM / embedding call (incl. the first).")

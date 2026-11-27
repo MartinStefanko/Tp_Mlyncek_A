@@ -47,6 +47,19 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
   diagnostika kvality (sections, question_meta, quality, warnings, timings); Laravel ho nemusí
   volať ani ukladať. Tvar reportu sa bez dôvodu nemení.
 
+## Lokálny model: zdegenerovaná odpoveď (po kroku 17)
+- Lokálny model musí ostať (rozhodnutie Martina). Gemma 4 26B (openai_compatible, JSON režim)
+  sa na 01.pdf náhodne zasekne: pokazí JSON a potom píše iba medzery / nové riadky až po limit
+  32 768 tokenov (99,9 % odpovede, minúty na volanie). Gemini na tom istom PDF prejde.
+- `qgen/llm/degenerate.py`: QGEN_LLM_MAX_WHITESPACE_RUN (500) medzier za sebou =
+  `DegenerateOutputError` (retryable, QGEN_LLM_RETRIES pokusov). Odrezaná odpoveď končiaca
+  takým behom je Degenerate, nie OutputTruncated (všetky adaptéry, `cut_off_error`).
+- openai_compatible: QGEN_LLM_STREAM=true (predvolene) = streaming so `stream_options.include_usage`,
+  volanie sa preruší hneď pri limite medzier; celkový časový limit QGEN_LLM_TIMEOUT_S stráži adaptér
+  (timeout SDK je pri streame na jedno čítanie). Adaptér bez factory má stream=False.
+- Generovanie otázok: Degenerate aj po pokusoch = ako odrezaná odpoveď (delenie batchu, jeden
+  celok bez otázok). LLMError.degenerate.
+
 ## Cieľ generovania a referenčná nahrávka
 - Cieľ generovania: čo najviac otázok, pokrytie všetkých tematických celkov.
   per_section je minimum, nie strop.
@@ -84,7 +97,10 @@ platí špecifikácia; ak s ňou niečo nesedí, zastav sa a spýtaj sa, nevymý
 - Kontrola `is_correct` pri choice je v kontrole vernosti (faithfulness, má text zdroja);
   `choices_ok: false` → otázka vyradená (`wrong_choice_marking`) s varovaním.
 - Generovanie po QGEN_QUESTION_GENERATION_BATCH_SIZE (3) celkoch; odpoveď odrezaná na limite
-  tokenov (OutputTruncatedError) rozdelí batch na polovicu; jeden celok, ktorý sa nezmestí = LLMError.
+  tokenov (OutputTruncatedError) rozdelí batch na polovicu. Jeden celok, ktorý sa nezmestí,
+  už NEzhodí úlohu (zmena po kroku 17, lokálny model): ostane z toho volania bez otázok
+  (BatchItems.failed), kolá doplnenia pokrytia ho skúsia znova, inak `section_without_questions`
+  s dôvodom. LLMError iba keď v prvých volaniach nedostal otázku žiadny celok.
 - Anthropic: temperature sa neposiela vôbec (ani extra_body).
 - Doplňujúce kolá: QGEN_QUESTION_EXTRA_ROUNDS=1.
 - Prah duplicít QGEN_QUESTION_DEDUP_THRESHOLD=0.94 (baseline_v4 nahratá s 0.95; dvojice

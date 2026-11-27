@@ -8,7 +8,9 @@ content of each section (tematický celok) allows.
          a section stops when a round brought nothing new
        every answer: normalization (qgen.questions.types), validation, type rules,
        duplicates within the section (qgen.questions.dedup)
-       an answer cut off at the output token limit splits the batch in half
+       an answer cut off at the output token limit (or degenerated into whitespace also
+       after the retries) splits the batch in half; a single section with such an answer
+       gets no questions from that call, the coverage rounds try it again
     3. evaluation of the kept questions: quality score (chunks of question_eval_batch_size),
        faithfulness with the check of the choice marking, answerability, filter
     4. coverage: up to QGEN_QUESTION_COVERAGE_ROUNDS rounds; in each round the sections with
@@ -29,8 +31,10 @@ questions get the ids of the former run (batch by batch, round by round), so the
 does not depend on the order in which the calls finish.
 
 per_section (options.questions.per_section) is a minimum, never a target or a limit.
-Nothing is written to disk. LLMError propagates (also when a single section does not fit
-into the output token limit).
+Nothing is written to disk. LLMError propagates, except a cut-off / degenerated answer of a
+single section (that section is left without questions and gets the warning
+section_without_questions if the coverage rounds do not fill it); when no section got any
+question in the first calls, that error propagates too.
 """
 
 from __future__ import annotations
@@ -149,6 +153,9 @@ class BatchItems:
                 (object {"lo_id": .., "reason": ..} without a question)
     splits      how many times the batch was split because the answer was cut off
     calls       generation calls made
+    failed      lo_id -> reason, a single section whose answer was cut off at the token
+                limit or degenerated into whitespace also after the retries
+    failure     the LLMError of the first such section
     """
 
     items: list[dict] = field(default_factory=list)
@@ -156,6 +163,8 @@ class BatchItems:
     no_content: dict = field(default_factory=dict)
     splits: int = 0
     calls: int = 0
+    failed: dict = field(default_factory=dict)
+    failure: Optional[LLMError] = None
 
     def extend(self, other: "BatchItems") -> None:
         self.items.extend(other.items)
@@ -163,6 +172,8 @@ class BatchItems:
         self.no_content.update(other.no_content)
         self.splits += other.splits
         self.calls += other.calls
+        self.failed.update(other.failed)
+        self.failure = self.failure or other.failure
 
 
 def _is_no_content_marker(item: dict) -> bool:
@@ -252,14 +263,28 @@ def generate_items_for_batch(
     return result
 
 
+FAILED_TRUNCATED = "the model's answer was cut off at the output token limit"
+FAILED_DEGENERATE = "the model's answer degenerated into whitespace (also after the retries)"
+
+
 def generate_with_split(los_batch, page_map, *, verbose=False, **kwargs) -> BatchItems:
-    """generate_items_for_batch; an answer cut off at the token limit splits the batch in
-    half (recursively). A single section that does not fit raises the LLMError."""
+    """generate_items_for_batch; an answer cut off at the token limit, or one that
+    degenerated into whitespace also after the retries, splits the batch in half
+    (recursively). A single section with such an answer gets no questions from this call
+    (BatchItems.failed); the job goes on and the coverage rounds try the section again.
+    Every other LLMError propagates."""
     try:
         return generate_items_for_batch(los_batch, page_map, verbose=verbose, **kwargs)
     except LLMError as error:
-        if not error.truncated or len(los_batch) <= 1:
+        if not (error.truncated or error.degenerate):
             raise
+        if len(los_batch) <= 1:
+            lo_id = los_batch[0].get("id") if los_batch else None
+            if verbose:
+                print(f"Celok {lo_id}: odpoved {'odrezana' if error.truncated else 'zdegenerovana'}, "
+                      "celok zatial bez otazok.")
+            reason = FAILED_TRUNCATED if error.truncated else FAILED_DEGENERATE
+            return BatchItems(calls=1, failed={lo_id: reason}, failure=error)
     if verbose:
         print(f"Odpoved odrezana pri {len(los_batch)} celkoch, delim batch na polovicu.")
     half = (len(los_batch) + 1) // 2
@@ -394,6 +419,8 @@ class _QuestionRun:
         self.next_id = 1
         self.generation_dropped: Counter = Counter()
         self.no_content: dict = {}
+        self.failed_sections: dict = {}   # lo_id -> reason (generate_with_split, BatchItems.failed)
+        self.first_failure: Optional[LLMError] = None
         self.splits = 0
         self.calls: Counter = Counter()
         self.times_clamped = 0
@@ -436,6 +463,8 @@ class _QuestionRun:
         """Counters of one generation answer (main thread, in the order of the batches)."""
         self.generation_dropped.update(result.dropped)
         self.no_content.update(result.no_content)
+        self.failed_sections.update(result.failed)
+        self.first_failure = self.first_failure or result.failure
         self.splits += result.splits
         self.calls[origin.split("_")[0]] += result.calls
 
@@ -532,6 +561,10 @@ class _QuestionRun:
             active_by_batch[number] = [
                 lo for lo in batch if new_counts[lo.get("id")] > 0 and lo.get("id") not in self.no_content
             ]
+        if not pending and self.first_failure is not None:
+            # No section got a question and at least one failed: the model does not work
+            # for this document at all, so the job fails (llm_error) instead of an empty result.
+            raise self.first_failure
 
         for round_no in range(1, self.extra_rounds + 1):
             work = [(number, active) for number, active in active_by_batch.items() if active]
@@ -958,7 +991,8 @@ def build_question_diagnostics(
             reason = "all generated questions were dropped (validation, type rules, duplicates or score filter)"
         else:
             stage = "generation"
-            reason = run.no_content.get(lo_id) or "the model returned no question, also not in the coverage rounds"
+            reason = (run.no_content.get(lo_id) or run.failed_sections.get(lo_id)
+                      or "the model returned no question, also not in the coverage rounds")
         bloom = lo.get("bloom_level", "")
         warnings.append({
             "code": WARNING_SECTION_WITHOUT_QUESTIONS,

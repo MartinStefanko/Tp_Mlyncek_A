@@ -3,7 +3,8 @@
 Adapters translate vendor exceptions into `ProviderError` (or a subclass). Its `retryable`
 flag tells `qgen.llm.retry` whether to try again:
     retried:      HTTP 429 (RateLimitError), 408 and 5xx, timeout (LLMTimeoutError),
-                  network errors
+                  network errors, an answer that degenerated into whitespace
+                  (DegenerateOutputError)
     not retried:  HTTP 400, 401, 403, 404 and every other 4xx; any exception that is not a
                   ProviderError (also not one of the built-in TimeoutError / ConnectionError)
 
@@ -52,10 +53,25 @@ class OutputTruncatedError(ProviderError):
         super().__init__(message, retryable=False, status=None)
 
 
+class DegenerateOutputError(ProviderError):
+    """The answer ran into an endless run of whitespace (QGEN_LLM_MAX_WHITESPACE_RUN
+    characters in a row), typically a local model in JSON mode: the constrained decoding
+    always allows whitespace, and a stuck model keeps writing it until the token limit.
+
+    Retried: it is random, the same prompt usually works the next time. After all attempts
+    the LLMError has `degenerate` = True; question generation then treats it like a cut-off
+    answer (split the batch; a single section is left without questions).
+    """
+
+    def __init__(self, message: str = "LLM answer degenerated into whitespace"):
+        super().__init__(message, retryable=True, status=None)
+
+
 class LLMError(Exception):
     """An LLM or embedding call failed for good. Job error code: llm_error.
 
     `truncated`: the cause is OutputTruncatedError (the answer hit the output token limit).
+    `degenerate`: the cause is DegenerateOutputError (the answer degenerated into whitespace).
     """
 
     code = "llm_error"
@@ -80,6 +96,10 @@ class LLMError(Exception):
     @property
     def truncated(self) -> bool:
         return isinstance(self.cause, OutputTruncatedError)
+
+    @property
+    def degenerate(self) -> bool:
+        return isinstance(self.cause, DegenerateOutputError)
 
 
 class LLMConfigError(ValueError):

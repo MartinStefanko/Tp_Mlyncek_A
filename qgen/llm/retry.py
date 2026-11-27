@@ -6,7 +6,8 @@
     embed_texts    texts -> vectors, split into batches of QGEN_EMBED_MAX_BATCH
 
 Every call gets up to QGEN_LLM_RETRIES attempts (incl. the first). Which errors are retried
-is decided by qgen.llm.errors.is_retryable: HTTP 429, 408, 5xx, timeout and network errors.
+is decided by qgen.llm.errors.is_retryable: HTTP 429, 408, 5xx, timeout and network errors,
+and an answer that degenerated into whitespace (DegenerateOutputError, qgen.llm.degenerate).
 Waiting between attempts:
     HTTP 429 with Retry-After  the provider's value
     HTTP 429 without it        QGEN_LLM_RETRY_DELAY_S * 2 ** (attempt - 1)
@@ -127,7 +128,9 @@ def generate_text(
 ) -> LLMResponse:
     """One prompt with retries. JSON mode is on by default (every prompt asks for JSON);
     temperature is QGEN_LLM_TEMPERATURE. An answer cut off at the token limit
-    (OutputTruncatedError) is not retried: LLMError with `truncated` = True."""
+    (OutputTruncatedError) is not retried: LLMError with `truncated` = True. An answer that
+    degenerated into whitespace is retried; after the last attempt LLMError with
+    `degenerate` = True."""
     _require_settings(settings)
     model = model or factory.model_for_role(role, settings)
     client = llm if llm is not None else factory.get_llm(role, settings)

@@ -8,7 +8,9 @@ generate sends (step 13, baseline_v5):
     temperature         always (QGEN_LLM_TEMPERATURE)
     max_output_tokens   only when the caller gives it (question generation)
 An answer that ended at the token limit (finish_reason MAX_TOKENS) raises
-OutputTruncatedError (not retried). The pipeline still parses the answer with safe_load_json.
+OutputTruncatedError (not retried), or DegenerateOutputError (retried) when it ends in a
+whitespace run of QGEN_LLM_MAX_WHITESPACE_RUN characters (qgen.llm.degenerate). The pipeline
+still parses the answer with safe_load_json.
 
 Timeout: set once on the client with HttpOptions(timeout=...). google-genai takes it in
 MILLISECONDS (HttpOptions.timeout: "Timeout for the request in milliseconds"); the setting
@@ -34,7 +36,8 @@ from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 
 from qgen.llm.base import LLMResponse
-from qgen.llm.errors import LLMTimeoutError, OutputTruncatedError, ProviderError, RateLimitError
+from qgen.llm.degenerate import DEFAULT_MAX_WHITESPACE_RUN, cut_off_error
+from qgen.llm.errors import LLMTimeoutError, ProviderError, RateLimitError
 
 try:  # google-genai uses httpx2 (a fork with its own exception classes) when it is installed
     import httpx2
@@ -186,8 +189,15 @@ def _vectors(response: Any, expected: int) -> list[list[float]]:
 class GeminiLLM:
     """LLMClient for Gemini. JSON mode, temperature and the token limit go in the config."""
 
-    def __init__(self, api_key: str = "", timeout_s: Optional[float] = None, client: Any = None):
+    def __init__(
+        self,
+        api_key: str = "",
+        timeout_s: Optional[float] = None,
+        client: Any = None,
+        max_whitespace_run: int = DEFAULT_MAX_WHITESPACE_RUN,
+    ):
         self._client = client if client is not None else build_client(api_key, timeout_s)
+        self._max_whitespace_run = max_whitespace_run
 
     def generate(
         self,
@@ -206,9 +216,10 @@ class GeminiLLM:
             if translated is error:
                 raise
             raise translated from error
+        text = _response_text(response)
         if _truncated(response):
-            raise OutputTruncatedError("Gemini answer cut off (finish_reason MAX_TOKENS)")
-        return LLMResponse(text=_response_text(response), model=model, usage=_usage(response))
+            raise cut_off_error("Gemini", "finish_reason MAX_TOKENS", text, self._max_whitespace_run)
+        return LLMResponse(text=text, model=model, usage=_usage(response))
 
 
 class GeminiEmbedder:

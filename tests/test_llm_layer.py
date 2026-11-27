@@ -340,6 +340,16 @@ def test_gemini_finish_reason_max_tokens_is_truncated():
     assert gemini.GeminiLLM(client=SimpleNamespace(models=_FakeModels(ok))).generate("p", model="m").text == "{}"
 
 
+def test_gemini_cut_off_answer_of_whitespace_is_degenerate():
+    from qgen.llm.errors import DegenerateOutputError
+
+    gemini = _gemini()
+    response = SimpleNamespace(text='{"items": [' + " " * 600, candidates=[SimpleNamespace(finish_reason="MAX_TOKENS")])
+    llm = gemini.GeminiLLM(client=SimpleNamespace(models=_FakeModels(response)))
+    with pytest.raises(DegenerateOutputError):
+        llm.generate("p", model="m")
+
+
 def test_truncated_answer_is_not_retried(settings, sleeps):
     from tests.fakes import truncated
 

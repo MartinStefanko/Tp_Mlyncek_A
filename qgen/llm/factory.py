@@ -237,6 +237,7 @@ def get_llm(role: str, settings: Settings) -> LLMClient:
     _raise_if(llm_config_problems(settings))
     provider = settings.llm_provider
     timeout = settings.llm_timeout_s
+    whitespace_run = settings.llm_max_whitespace_run
 
     if provider == "gemini":
         key = settings.gemini_api_key.get_secret_value()
@@ -244,19 +245,21 @@ def get_llm(role: str, settings: Settings) -> LLMClient:
         def build():
             from qgen.llm.adapters.gemini import GeminiLLM
 
-            return GeminiLLM(api_key=key, timeout_s=timeout)
+            return GeminiLLM(api_key=key, timeout_s=timeout, max_whitespace_run=whitespace_run)
 
-        return _cached(_llm_cache, (provider, key, timeout), build)
+        return _cached(_llm_cache, (provider, key, timeout, whitespace_run), build)
 
     if provider == "openai_compatible":
         base_url, key = settings.llm_base_url, settings.llm_api_key.get_secret_value()
+        stream = settings.llm_stream
 
         def build():
             from qgen.llm.adapters.openai_compatible import OpenAICompatLLM
 
-            return OpenAICompatLLM(base_url=base_url, api_key=key, timeout_s=timeout)
+            return OpenAICompatLLM(base_url=base_url, api_key=key, timeout_s=timeout, stream=stream,
+                                   max_whitespace_run=whitespace_run)
 
-        return _cached(_llm_cache, (provider, base_url, key, timeout), build)
+        return _cached(_llm_cache, (provider, base_url, key, timeout, stream, whitespace_run), build)
 
     if provider == "anthropic":
         key, max_tokens = settings.anthropic_api_key.get_secret_value(), settings.llm_max_tokens
@@ -264,9 +267,10 @@ def get_llm(role: str, settings: Settings) -> LLMClient:
         def build():
             from qgen.llm.adapters.anthropic import AnthropicLLM
 
-            return AnthropicLLM(api_key=key, timeout_s=timeout, max_tokens=max_tokens)
+            return AnthropicLLM(api_key=key, timeout_s=timeout, max_tokens=max_tokens,
+                                max_whitespace_run=whitespace_run)
 
-        return _cached(_llm_cache, (provider, key, timeout, max_tokens), build)
+        return _cached(_llm_cache, (provider, key, timeout, max_tokens, whitespace_run), build)
 
     if provider == REPLAY:
         return _replay_client(settings)

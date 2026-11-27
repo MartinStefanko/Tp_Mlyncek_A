@@ -15,10 +15,20 @@ generate sends:
     response_format  {"type": "json_object"} when json_mode=True. Since step 13 every prompt
                      asks for a JSON object ({"items": [...]} or the language object), and
                      every prompt contains the word "JSON", as OpenAI requires.
+    stream          True with QGEN_LLM_STREAM (default), with stream_options include_usage
 safe_load_json and one repeated call stay in qgen.llm.retry. An answer that ended at the
 token limit (finish_reason "length") raises OutputTruncatedError (not retried).
 
-Timeout: QGEN_LLM_TIMEOUT_S (seconds) as the client timeout. The SDK's own retries are off
+Degenerated answer (qgen.llm.degenerate): a local model in JSON mode can get stuck and write
+only whitespace until the token limit (Gemma 4 on 01.pdf: 32 768 tokens, minutes per call).
+With streaming the answer is read chunk by chunk and the call is stopped as soon as
+QGEN_LLM_MAX_WHITESPACE_RUN whitespace characters came in a row; without streaming an answer
+cut off at the limit that ends in such a run is recognised afterwards. Both raise
+DegenerateOutputError, which qgen.llm.retry retries.
+
+Timeout: QGEN_LLM_TIMEOUT_S (seconds) as the client timeout. With streaming the SDK timeout
+applies to each read, so the adapter also stops a stream that runs longer than
+QGEN_LLM_TIMEOUT_S in total (LLMTimeoutError). The SDK's own retries are off
 (max_retries=0); qgen.llm.retry retries.
 
 Error translation (see qgen.llm.adapters._http):
@@ -27,17 +37,27 @@ Error translation (see qgen.llm.adapters._http):
     APIStatusError other 4xx  -> ProviderError(retryable=False)
     APITimeoutError           -> LLMTimeoutError
     APIConnectionError        -> ProviderError(retryable=True)   network
+    httpx(2) errors while a stream is read: TimeoutException -> LLMTimeoutError,
+                              TransportError -> ProviderError(retryable=True)
+    APIError in a stream      -> ProviderError(retryable=True)   error event from the server
 """
 
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
 import openai
 
 from qgen.llm.adapters._http import status_error
 from qgen.llm.base import LLMResponse
-from qgen.llm.errors import LLMConfigError, LLMTimeoutError, OutputTruncatedError, ProviderError
+from qgen.llm.degenerate import DEFAULT_MAX_WHITESPACE_RUN, WhitespaceRunGuard, cut_off_error
+from qgen.llm.errors import DegenerateOutputError, LLMConfigError, LLMTimeoutError, ProviderError
+
+try:  # the openai SDK uses httpx2 (a fork with its own exception classes) when it is installed
+    import httpx2 as _httpx
+except ImportError:  # pragma: no cover
+    import httpx as _httpx
 
 PROVIDER = "OpenAI-compatible"
 PLACEHOLDER_API_KEY = "no-key"  # sent when the key is empty (local server)
@@ -62,6 +82,12 @@ def translate_error(error: Exception) -> Exception:
         return LLMTimeoutError(f"{PROVIDER} call timed out ({type(error).__name__})")
     if isinstance(error, (openai.APIConnectionError, ConnectionError)):
         return ProviderError(f"{PROVIDER} network error ({type(error).__name__})", retryable=True)
+    if isinstance(error, _httpx.TimeoutException):  # raised while a stream is read
+        return LLMTimeoutError(f"{PROVIDER} stream timed out ({type(error).__name__})")
+    if isinstance(error, _httpx.TransportError):
+        return ProviderError(f"{PROVIDER} network error in stream ({type(error).__name__})", retryable=True)
+    if isinstance(error, openai.APIError):  # error event inside a stream (no HTTP status)
+        return ProviderError(f"{PROVIDER} error in stream ({type(error).__name__})", retryable=True)
     return error
 
 
@@ -105,7 +131,11 @@ def _usage(response: Any) -> dict[str, int]:
 
 
 class OpenAICompatLLM:
-    """LLMClient over /v1/chat/completions. One HTTP call per `generate`."""
+    """LLMClient over /v1/chat/completions. One HTTP call per `generate`.
+
+    stream=True: the answer comes as server-sent events and a degenerated answer is stopped
+    early (the factory passes QGEN_LLM_STREAM; the default here is False for a plain client).
+    """
 
     def __init__(
         self,
@@ -113,8 +143,13 @@ class OpenAICompatLLM:
         api_key: str = "",
         timeout_s: Optional[float] = None,
         client: Any = None,
+        stream: bool = False,
+        max_whitespace_run: int = DEFAULT_MAX_WHITESPACE_RUN,
     ):
         self._client = client if client is not None else build_client(base_url, api_key, timeout_s)
+        self._stream = stream
+        self._timeout_s = float(timeout_s) if timeout_s else None
+        self._max_whitespace_run = max_whitespace_run
 
     def generate(
         self,
@@ -134,14 +169,69 @@ class OpenAICompatLLM:
             kwargs["max_tokens"] = max_tokens
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        if self._stream:
+            return self._generate_stream(kwargs, model)
         response = _call(self._client.chat.completions.create, **kwargs)
+        text = _response_text(response)
         if _truncated(response):
-            raise OutputTruncatedError(f"{PROVIDER} answer cut off (finish_reason length)")
+            raise cut_off_error(PROVIDER, "finish_reason length", text, self._max_whitespace_run)
         answered_by = getattr(response, "model", None)
         return LLMResponse(
-            text=_response_text(response),
+            text=text,
             model=answered_by if isinstance(answered_by, str) and answered_by else model,
             usage=_usage(response),
+        )
+
+    def _generate_stream(self, kwargs: dict[str, Any], model: str) -> LLMResponse:
+        deadline = time.monotonic() + self._timeout_s if self._timeout_s else None
+        guard = WhitespaceRunGuard(self._max_whitespace_run)
+        parts: list[str] = []
+        finish_reason = None
+        answered_by = None
+        usage: dict[str, int] = {}
+        stream = _call(
+            self._client.chat.completions.create, stream=True, stream_options={"include_usage": True}, **kwargs
+        )
+        try:
+            iterator = iter(stream)
+            while True:
+                try:
+                    chunk = next(iterator)
+                except StopIteration:
+                    break
+                except Exception as error:
+                    translated = translate_error(error)
+                    if translated is error:
+                        raise
+                    raise translated from error
+                answered_by = answered_by or getattr(chunk, "model", None)
+                if getattr(chunk, "usage", None) is not None:
+                    usage = _usage(chunk)
+                for choice in getattr(chunk, "choices", None) or []:
+                    delta = getattr(choice, "delta", None)
+                    text = getattr(delta, "content", None) or ""
+                    if text:
+                        parts.append(text)
+                        if guard.feed(text):
+                            raise DegenerateOutputError(
+                                f"{PROVIDER} answer degenerated into whitespace "
+                                f"({guard.run} characters in a row, stream stopped)"
+                            )
+                    if getattr(choice, "finish_reason", None):
+                        finish_reason = choice.finish_reason
+                if deadline is not None and time.monotonic() > deadline:
+                    raise LLMTimeoutError(f"{PROVIDER} stream ran longer than {self._timeout_s:g} s")
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close()
+        text = "".join(parts)
+        if finish_reason == "length":
+            raise cut_off_error(PROVIDER, "finish_reason length", text, self._max_whitespace_run)
+        return LLMResponse(
+            text=text,
+            model=answered_by if isinstance(answered_by, str) and answered_by else model,
+            usage=usage,
         )
 
 

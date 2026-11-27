@@ -32,6 +32,7 @@ from tests.fakes import (
     is_question_generation,
     items,
     question,
+    degenerated,
     section_ids,
     truncated,
 )
@@ -435,7 +436,86 @@ def test_cut_off_answer_splits_the_batch():
     assert len(result.questions) == 4
 
 
-def test_single_section_that_does_not_fit_is_an_llm_error():
+def _failing_section_model(failing_id, error, calls, fail_times=None):
+    """Question answers; section `failing_id` alone raises `error()` (always, or the first
+    `fail_times` calls); a batch with it and other sections is cut off (so it gets split)."""
+    failures = [0]
+
+    def answer(prompt, model):
+        if is_question_generation(prompt) and not is_extra_round(prompt):
+            ids = section_ids(prompt)
+            calls.append(ids)
+            if failing_id in ids:
+                if len(ids) > 1:
+                    raise truncated()
+                if fail_times is None or failures[0] < fail_times:
+                    failures[0] += 1
+                    raise error()
+            return items(question(i, 1) for i in ids)
+        return check_answer(prompt) or EMPTY_ITEMS
+
+    return answer
+
+
+def _generate(answer, sections=SECTIONS, **settings):
+    result = generate_all_items(sections, SEGMENTS, llm=FakeLLM(default=answer),
+                                embedder=FakeEmbedder(default=OrthogonalVectors()), verbose=False,
+                                document_language="sk", settings=_settings(**settings), per_section=1)
+    return result, result.reports["question_diagnostics"]
+
+
+@pytest.mark.parametrize("error, attempts, reason", [
+    (truncated, 1, "cut off at the output token limit"),        # not retried
+    (degenerated, 3, "degenerated into whitespace"),            # retried, llm_retries=3
+])
+def test_single_section_that_fails_is_left_without_questions(error, attempts, reason):
+    """The job goes on: the other sections get their questions, the coverage rounds try the
+    failed section again (own call), then the warning section_without_questions."""
+    calls = []
+    result, diagnostics = _generate(_failing_section_model(2, error, calls), llm_retries=3)
+    assert sorted({q["lo_id"] for q in result.questions}) == [1, 3, 4]
+    # the split call + one call in each of the 2 coverage rounds, each with its attempts
+    assert calls.count([2]) == (1 + 2) * attempts
+    warning = next(w for w in diagnostics["warnings"] if w["code"] == "section_without_questions")
+    assert warning["section_id"] == 2 and warning["stage"] == "generation" and reason in warning["reason"]
+
+
+def test_failed_section_filled_by_a_coverage_round_has_no_warning():
+    calls = []
+    result, diagnostics = _generate(_failing_section_model(2, truncated, calls, fail_times=1))
+    assert sorted({q["lo_id"] for q in result.questions}) == [1, 2, 3, 4]
+    assert calls.count([2]) == 2
+    assert not [w for w in diagnostics["warnings"] if w["code"] == "section_without_questions"]
+
+
+def test_degenerated_answer_is_retried_without_splitting():
+    """DegenerateOutputError is retryable: the same call again, the batch is not split."""
+    calls = []
+    result, diagnostics = _generate(_failing_section_model(1, degenerated, calls, fail_times=2),
+                                    sections=SECTIONS[:1])
+    assert calls == [[1], [1], [1]] and diagnostics["batch_splits"] == 0
+    assert [q["lo_id"] for q in result.questions] == [1]
+
+
+def test_degenerated_answer_after_all_retries_splits_the_batch():
+    calls = []
+
+    def answer(prompt, model):
+        if is_question_generation(prompt) and not is_extra_round(prompt):
+            ids = section_ids(prompt)
+            calls.append(ids)
+            if len(ids) > 1:
+                raise degenerated()
+            return items([question(ids[0], 1)])
+        return check_answer(prompt) or EMPTY_ITEMS
+
+    result, diagnostics = _generate(answer, sections=SECTIONS[:2], llm_retries=2)
+    assert calls == [[1, 2], [1, 2], [1], [2]] and diagnostics["batch_splits"] == 1
+    assert len(result.questions) == 2
+
+
+def test_no_section_gets_a_question_is_an_llm_error():
+    """Every section fails: the model does not work for the document, the job fails."""
     def answer(prompt, model):
         if is_question_generation(prompt):
             raise truncated()

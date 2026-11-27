@@ -220,6 +220,155 @@ def test_openai_translate_keeps_unknown_errors():
     assert openai_adapter.translate_error(other) is other
 
 
+# --- degenerated answer (whitespace run) and streaming ---------------------------------
+
+WHITESPACE = "\n" + " " * 12
+
+
+def _chat_response(content, finish_reason="stop"):
+    return httpx2.Response(200, json={
+        "id": "c", "object": "chat.completion", "created": 1, "model": "m",
+        "choices": [{"index": 0, "finish_reason": finish_reason, "message": {"role": "assistant", "content": content}}],
+    })
+
+
+def _sse(*contents, finish_reason="stop", usage=True, model="served-model"):
+    """Streamed chat completion: one chunk per content piece, then the finish reason and usage."""
+    def chunk(delta, finish=None, with_usage=None):
+        return {"id": "c", "object": "chat.completion.chunk", "created": 1, "model": model,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}], "usage": with_usage}
+
+    events = [chunk({"role": "assistant", "content": ""})]
+    events += [chunk({"content": text}) for text in contents]
+    events.append(chunk({}, finish_reason))
+    if usage:
+        events.append({"id": "c", "object": "chat.completion.chunk", "created": 1, "model": model, "choices": [],
+                       "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}})
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
+
+
+def test_openai_cut_off_answer_of_whitespace_is_degenerate():
+    """Gemma 4 on 01.pdf: a broken first question, then whitespace up to the token limit."""
+    from qgen.llm.errors import DegenerateOutputError
+
+    stuck = _chat_response('{"items": [{"lo_id": 22, "name": "X", "choices": [{"text": "20+", "}, {"'
+                           + WHITESPACE * 100, finish_reason="length")
+    with pytest.raises(DegenerateOutputError) as info:
+        OpenAICompatLLM(client=_openai_sdk(MockServer(stuck))).generate("p", model="m")
+    assert info.value.retryable
+    # a short whitespace run at the end stays an ordinary cut-off answer (not retried)
+    with pytest.raises(OutputTruncatedError):
+        OpenAICompatLLM(client=_openai_sdk(MockServer(_chat_response('{"items": [' + WHITESPACE, "length")))
+                        ).generate("p", model="m")
+
+
+def test_openai_stream_request_and_answer():
+    server = MockServer(_sse('{"items": ', "[1]", "}"))
+    llm = OpenAICompatLLM(client=_openai_sdk(server), stream=True)
+    response = llm.generate("prompt text", model="gemma", json_mode=True, max_tokens=100)
+    assert server.body == {
+        "model": "gemma",
+        "messages": [{"role": "user", "content": "prompt text"}],
+        "temperature": 0.2,
+        "max_tokens": 100,
+        "response_format": {"type": "json_object"},
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    assert response == LLMResponse('{"items": [1]}', "served-model",
+                                   {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12})
+
+
+def test_openai_stream_without_usage():
+    response = OpenAICompatLLM(client=_openai_sdk(MockServer(_sse("[1]", usage=False))), stream=True
+                               ).generate("p", model="m")
+    assert response.text == "[1]" and response.usage == {}
+
+
+def test_openai_stream_stops_a_degenerated_answer_early():
+    """The stream is stopped at the whitespace limit, long before the (scripted) end."""
+    from qgen.llm.errors import DegenerateOutputError
+
+    pieces = ['{"items": [{"lo_id": 1, "name": "', "X", '", "}, {"'] + [WHITESPACE] * 1000 + ["never read"]
+    llm = OpenAICompatLLM(client=_openai_sdk(MockServer(_sse(*pieces))), stream=True, max_whitespace_run=100)
+    with pytest.raises(DegenerateOutputError) as info:
+        llm.generate("p", model="m")
+    assert "stream stopped" in str(info.value) and "never" not in str(info.value)
+
+
+def test_openai_stream_indentation_is_not_degenerate():
+    pretty = json.dumps({"items": [{"lo_id": i, "name": "x" * 20} for i in range(50)]}, indent=12)
+    pieces = [pretty[i:i + 7] for i in range(0, len(pretty), 7)]
+    response = OpenAICompatLLM(client=_openai_sdk(MockServer(_sse(*pieces))), stream=True, max_whitespace_run=50
+                               ).generate("p", model="m")
+    assert response.text == pretty
+
+
+def test_openai_stream_finish_reason_length_is_truncated():
+    llm = OpenAICompatLLM(client=_openai_sdk(MockServer(_sse('{"items": [', finish_reason="length"))), stream=True)
+    with pytest.raises(OutputTruncatedError):
+        llm.generate("p", model="m")
+
+
+def test_openai_stream_total_timeout(monkeypatch):
+    """The SDK timeout is per read; the adapter stops a stream that runs too long in total."""
+    clock = iter([0.0, 5.0, 11.0, 20.0, 30.0, 40.0])
+    monkeypatch.setattr(openai_adapter.time, "monotonic", lambda: next(clock))
+    llm = OpenAICompatLLM(client=_openai_sdk(MockServer(_sse("a", "b", "c", "d"))), stream=True, timeout_s=10)
+    with pytest.raises(LLMTimeoutError):
+        llm.generate("p", model="m")
+
+
+def test_openai_stream_http_errors_are_translated():
+    with pytest.raises(RateLimitError):
+        OpenAICompatLLM(client=_openai_sdk(MockServer(_status(429, {"retry-after": "2"}))), stream=True
+                        ).generate("p", model="m")
+    with pytest.raises(LLMTimeoutError):
+        OpenAICompatLLM(client=_openai_sdk(MockServer(httpx2.ReadTimeout)), stream=True).generate("p", model="m")
+
+
+def test_retry_layer_repeats_a_degenerated_stream(monkeypatch):
+    """End to end: stuck answer -> DegenerateOutputError -> qgen.llm.retry calls again."""
+    monkeypatch.setattr(retry, "_sleep", lambda s: None)
+    server = MockServer(_sse("{", *[WHITESPACE] * 100), _sse('{"items": [1]}'))
+    llm = OpenAICompatLLM(client=_openai_sdk(server), stream=True, max_whitespace_run=200)
+    settings = Settings.model_construct()
+    assert retry.generate_json(llm, "p", role="questions", model="m", settings=settings, items_key="items") == [1]
+    assert len(server.requests) == 2
+
+
+def test_retry_layer_degenerate_after_all_attempts(monkeypatch):
+    monkeypatch.setattr(retry, "_sleep", lambda s: None)
+    server = MockServer(*[_sse("{", *[WHITESPACE] * 100) for _ in range(3)])
+    llm = OpenAICompatLLM(client=_openai_sdk(server), stream=True, max_whitespace_run=200)
+    with pytest.raises(LLMError) as info:
+        retry.generate_text(llm, "p", role="questions", model="m", settings=Settings.model_construct(llm_retries=3))
+    assert info.value.degenerate and not info.value.truncated and info.value.attempts == 3
+
+
+def test_factory_passes_stream_and_whitespace_limit():
+    settings = Settings.model_construct(llm_provider="openai_compatible", llm_base_url="http://llm:8001/v1",
+                                        llm_model="gemma", llm_model_eval="gemma", llm_stream=True,
+                                        llm_max_whitespace_run=321)
+    llm = factory.get_llm("questions", settings)
+    assert llm._stream is True and llm._max_whitespace_run == 321
+    off = factory.get_llm("questions", settings.model_copy(update={"llm_stream": False}))
+    assert off._stream is False
+
+
+def test_whitespace_run_guard_counts_across_chunks():
+    from qgen.llm.degenerate import WhitespaceRunGuard, trailing_whitespace_run
+
+    guard = WhitespaceRunGuard(10)
+    assert not guard.feed('{"a": 1,   ')       # run 3
+    assert not guard.feed("    ")              # run 7
+    assert not guard.feed('"b"\n ')            # text resets: run 2
+    assert not guard.feed("      ")            # run 8
+    assert guard.feed("  ")                    # run 10
+    assert trailing_whitespace_run("x \n\t ") == 4 and trailing_whitespace_run("") == 0
+
+
 # --- Anthropic adapter ----------------------------------------------------------------
 
 def test_anthropic_generate_request():
@@ -260,6 +409,19 @@ def test_anthropic_stop_reason_max_tokens_is_truncated():
     })
     with pytest.raises(OutputTruncatedError):
         AnthropicLLM(client=_anthropic_sdk(MockServer(cut))).generate("p", model="claude-test", max_tokens=4)
+
+
+def test_anthropic_cut_off_answer_of_whitespace_is_degenerate():
+    from qgen.llm.errors import DegenerateOutputError
+
+    stuck = httpx2.Response(200, json={
+        "id": "m1", "type": "message", "role": "assistant", "model": "claude-test",
+        "content": [{"type": "text", "text": '{"items": [' + WHITESPACE * 100}],
+        "stop_reason": "max_tokens", "stop_sequence": None,
+        "usage": {"input_tokens": 9, "output_tokens": 4},
+    })
+    with pytest.raises(DegenerateOutputError):
+        AnthropicLLM(client=_anthropic_sdk(MockServer(stuck))).generate("p", model="claude-test")
 
 
 def test_anthropic_answer_without_text_is_empty():

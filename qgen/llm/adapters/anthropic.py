@@ -16,7 +16,8 @@ generate sends:
                 here; it is also not sent through extra_body.
 The answer text is the concatenation of all text blocks; usage from response.usage.
 An answer that ended at the token limit (stop_reason "max_tokens") raises
-OutputTruncatedError (not retried).
+OutputTruncatedError (not retried), or DegenerateOutputError (retried) when it ends in a
+whitespace run of QGEN_LLM_MAX_WHITESPACE_RUN characters (qgen.llm.degenerate).
 
 Timeout: QGEN_LLM_TIMEOUT_S (seconds) as the client timeout. The SDK's own retries are off
 (max_retries=0); qgen.llm.retry retries.
@@ -37,7 +38,8 @@ import anthropic
 
 from qgen.llm.adapters._http import status_error
 from qgen.llm.base import LLMResponse
-from qgen.llm.errors import LLMConfigError, LLMTimeoutError, OutputTruncatedError, ProviderError
+from qgen.llm.degenerate import DEFAULT_MAX_WHITESPACE_RUN, cut_off_error
+from qgen.llm.errors import LLMConfigError, LLMTimeoutError, ProviderError
 
 PROVIDER = "Anthropic"
 DEFAULT_MAX_TOKENS = 8192  # same as the default of QGEN_LLM_MAX_TOKENS
@@ -100,9 +102,11 @@ class AnthropicLLM:
         timeout_s: Optional[float] = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         client: Any = None,
+        max_whitespace_run: int = DEFAULT_MAX_WHITESPACE_RUN,
     ):
         self._client = client if client is not None else build_client(api_key, timeout_s)
         self._max_tokens = max_tokens
+        self._max_whitespace_run = max_whitespace_run
 
     def generate(
         self,
@@ -128,11 +132,12 @@ class AnthropicLLM:
             if translated is error:
                 raise
             raise translated from error
+        text = _response_text(response)
         if getattr(response, "stop_reason", None) == "max_tokens":
-            raise OutputTruncatedError(f"{PROVIDER} answer cut off (stop_reason max_tokens)")
+            raise cut_off_error(PROVIDER, "stop_reason max_tokens", text, self._max_whitespace_run)
         answered_by = getattr(response, "model", None)
         return LLMResponse(
-            text=_response_text(response),
+            text=text,
             model=answered_by if isinstance(answered_by, str) and answered_by else model,
             usage=_usage(response),
         )
